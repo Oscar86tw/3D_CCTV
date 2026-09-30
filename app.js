@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.2';
+import { APP_CONFIG } from './config.js?v=2.3';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v22-api-url';
+const API_CACHE_KEY='utop-cctv-v23-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -59,13 +59,13 @@ async function getApiUrl(force=false){
     return cached;
   }
 
-  // 最後才嘗試工作表1!B1。
+  // 最後才嘗試工作表1!B2。
   try{
     const sheet=encodeURIComponent(APP_CONFIG.cloudApi.configSheet||'工作表1');
     const cell=encodeURIComponent(APP_CONFIG.cloudApi.apiCell||'B1');
     const url=`https://docs.google.com/spreadsheets/d/${APP_CONFIG.googleSheetId}/gviz/tq?tqx=out:csv&sheet=${sheet}&range=${cell}&_=${Date.now()}`;
     const res=await fetch(url,{cache:'no-store'});
-    if(!res.ok)throw new Error(`B1 HTTP ${res.status}`);
+    if(!res.ok)throw new Error(`B2 HTTP ${res.status}`);
     const b1=parseCsvCell(await res.text()).replace(/\?.*$/,'');
     if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(b1)){
       activeApiUrl=b1;
@@ -73,7 +73,7 @@ async function getApiUrl(force=false){
       return b1;
     }
   }catch(err){
-    console.warn('工作表1!B1 備援讀取失敗：',err);
+    console.warn('工作表1!B2 備援讀取失敗：',err);
   }
 
   throw new Error('沒有可用的 Apps Script /exec');
