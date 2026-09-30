@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.7';
+import { APP_CONFIG } from './config.js?v=2.8';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v27-api-url';
+const API_CACHE_KEY='utop-cctv-v28-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.7'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.7`);
+    if(apiVersion!=='2.8'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.8`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -789,7 +789,26 @@ function obstacleSegments(){
   });
   return out;
 }
-function cameraCoverage(c){const pre=LENS[String(c.lens)]||LENS['2.8'],range=Number(c.range||pre.range),fov=THREE.MathUtils.degToRad(pre.fov),yaw=THREE.MathUtils.degToRad(Number(c.yaw||0)),segs=obstacleSegments(),shape=new THREE.Shape();shape.moveTo(0,0);const samples=40;for(let i=0;i<=samples;i++){const off=-fov/2+fov*i/samples,ang=yaw+off,dir={x:Math.sin(ang),z:-Math.cos(ang)};let d=range;for(const [a,b] of segs){const t=raySeg({x:c.x||0,z:c.z||0},dir,a,b);if(t!==null&&t<d)d=t}shape.lineTo(dir.x*d,dir.z*d)}shape.closePath();const mesh=new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:COLORS[c.status]||COLORS.existing,transparent:true,opacity:.18,side:THREE.DoubleSide,depthWrite:false}));mesh.position.set(c.x||0,.055,c.z||0);mesh.userData={kind:'camera-coverage',id:c.id};return mesh}
+function cameraCoverage(c){
+  const pre=LENS[String(c.lens)]||LENS['2.8'],range=Number(c.range||pre.range),fov=THREE.MathUtils.degToRad(pre.fov),yaw=THREE.MathUtils.degToRad(Number(c.yaw||0)),segs=obstacleSegments(),shape=new THREE.Shape();
+  const origin={x:(c.x||0)+Math.sin(yaw)*0.88,z:(c.z||0)-Math.cos(yaw)*0.88};
+  shape.moveTo(0,0);
+  const samples=40;
+  for(let i=0;i<=samples;i++){
+    const off=-fov/2+fov*i/samples,ang=yaw+off,dir={x:Math.sin(ang),z:-Math.cos(ang)};
+    let d=range;
+    for(const [a,b] of segs){const t=raySeg(origin,dir,a,b);if(t!==null&&t<d)d=t}
+    shape.lineTo(dir.x*d,dir.z*d)
+  }
+  shape.closePath();
+  const mesh=new THREE.Mesh(
+    new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial({color:COLORS[c.status]||COLORS.existing,transparent:true,opacity:.18,side:THREE.DoubleSide,depthWrite:false})
+  );
+  mesh.position.set(origin.x,.055,origin.z);
+  mesh.userData={kind:'camera-coverage',id:c.id};
+  return mesh
+}
 
 function createFivePointStarShape(outer=0.9,inner=0.4){
   const shape=new THREE.Shape();
@@ -866,63 +885,147 @@ function makeCamera(c){
   g.rotation.y=-THREE.MathUtils.degToRad(Number(c.yaw||0));
   g.userData={kind:'camera',id:c.id};
 
-  // V2.6：恢復舊版較完整的監視器模組外觀：機身 + 鏡頭 + 支柱 + 底座。
-  const body=new THREE.Mesh(
-    new THREE.BoxGeometry(1.8,.8,.9),
-    new THREE.MeshStandardMaterial({
-      color:isSelected?0xf8fafc:color,
-      metalness:.25,
-      roughness:.42,
-      emissive:isSelected?0x334155:0
-    })
-  );
-  body.position.set(0,2.6,0);
+  const bodyMat=new THREE.MeshStandardMaterial({
+    color:isSelected?0xf8fafc:0xe5e7eb,
+    metalness:.38,
+    roughness:.42,
+    emissive:isSelected?0x334155:0x000000
+  });
+  const hoodMat=new THREE.MeshStandardMaterial({color:isSelected?0xffffff:0xf3f4f6,metalness:.32,roughness:.4});
+  const darkMat=new THREE.MeshStandardMaterial({color:0x262b33,metalness:.46,roughness:.28});
+  const standMat=new THREE.MeshStandardMaterial({color:0x6b7280,metalness:.52,roughness:.38});
+  const accentMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:color,metalness:.2,roughness:.45,emissive:isSelected?0x334155:0});
+
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.95,.72,1.08),bodyMat);
+  body.position.set(0,2.72,0);
+  body.scale.x=1.02;
   body.userData=g.userData;
   g.add(body);
 
-  // 鏡頭朝 local -Z，與目前 FOV 方向一致。
+  const hood=new THREE.Mesh(new THREE.BoxGeometry(2.06,.28,1.18),hoodMat);
+  hood.position.set(0,3.01,-.06);
+  hood.scale.set(1.02,1,1);
+  hood.userData=g.userData;
+  g.add(hood);
+
+  const topChamfer=new THREE.Mesh(new THREE.BoxGeometry(1.5,.14,.98),hoodMat);
+  topChamfer.position.set(0,2.92,-.22);
+  topChamfer.rotation.x=.18;
+  topChamfer.userData=g.userData;
+  g.add(topChamfer);
+
+  const frontBezel=new THREE.Mesh(new THREE.BoxGeometry(.84,.84,.24),darkMat);
+  frontBezel.position.set(0,2.74,-.57);
+  frontBezel.userData=g.userData;
+  g.add(frontBezel);
+
+  const lensShroud=new THREE.Mesh(new THREE.CylinderGeometry(.3,.34,.18,24),darkMat);
+  lensShroud.rotation.x=Math.PI/2;
+  lensShroud.position.set(0,2.74,-.69);
+  lensShroud.userData=g.userData;
+  g.add(lensShroud);
+
   const lens=new THREE.Mesh(
-    new THREE.CylinderGeometry(.28,.28,.38,20),
-    new THREE.MeshStandardMaterial({
-      color:0x0f172a,
-      metalness:.65,
-      roughness:.22
-    })
+    new THREE.CylinderGeometry(.22,.24,.16,24),
+    new THREE.MeshStandardMaterial({color:0x0f172a,metalness:.78,roughness:.16})
   );
   lens.rotation.x=Math.PI/2;
-  lens.position.set(0,2.6,-.62);
+  lens.position.set(0,2.74,-.77);
   lens.userData=g.userData;
   g.add(lens);
 
   const lensGlass=new THREE.Mesh(
-    new THREE.CircleGeometry(.20,20),
-    new THREE.MeshStandardMaterial({
-      color:0x38bdf8,
-      emissive:0x082f49,
-      metalness:.15,
-      roughness:.16
-    })
+    new THREE.CircleGeometry(.205,24),
+    new THREE.MeshStandardMaterial({color:0x93c5fd,emissive:0x1e3a8a,emissiveIntensity:.25,metalness:.12,roughness:.08,transparent:true,opacity:.95})
   );
-  lensGlass.position.set(0,2.6,-.82);
+  lensGlass.position.set(0,2.74,-.86);
   lensGlass.rotation.x=-Math.PI/2;
   lensGlass.userData=g.userData;
   g.add(lensGlass);
 
-  const pole=new THREE.Mesh(
-    new THREE.CylinderGeometry(.09,.09,2.2,12),
-    new THREE.MeshStandardMaterial({color:isSelected?0xe2e8f0:color,metalness:.18,roughness:.55})
-  );
-  pole.position.y=1.45;
+  for(const sx of[-.28,.28]){
+    for(const sy of[-.28,.28]){
+      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.035,.035,.03,12),new THREE.MeshStandardMaterial({color:0xd1d5db,metalness:.75,roughness:.2}));
+      screw.rotation.x=Math.PI/2;
+      screw.position.set(sx,2.74+sy,-.44);
+      screw.userData=g.userData;
+      g.add(screw);
+    }
+  }
+
+  const sideCap=new THREE.Mesh(new THREE.BoxGeometry(.18,.54,.92),bodyMat);
+  sideCap.position.set(0,2.71,.51);
+  sideCap.userData=g.userData;
+  g.add(sideCap);
+
+  const joint=new THREE.Mesh(new THREE.BoxGeometry(.46,.24,.48),standMat);
+  joint.position.set(0,2.3,.08);
+  joint.userData=g.userData;
+  g.add(joint);
+
+  const hingeA=new THREE.Mesh(new THREE.BoxGeometry(.18,.38,.24),standMat);
+  hingeA.position.set(-.18,2.45,.08);
+  hingeA.userData=g.userData;
+  g.add(hingeA);
+
+  const hingeB=hingeA.clone();
+  hingeB.position.x=.18;
+  hingeB.userData=g.userData;
+  g.add(hingeB);
+
+  const hingePin=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,.46,20),accentMat);
+  hingePin.rotation.z=Math.PI/2;
+  hingePin.position.set(0,2.45,.08);
+  hingePin.userData=g.userData;
+  g.add(hingePin);
+
+  const neck=new THREE.Mesh(new THREE.CylinderGeometry(.11,.13,.26,16),standMat);
+  neck.position.set(0,2.05,.08);
+  neck.userData=g.userData;
+  g.add(neck);
+
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(.14,.14,1.52,16),standMat);
+  pole.position.set(0,1.17,.08);
   pole.userData=g.userData;
   g.add(pole);
 
-  const ring=new THREE.Mesh(
-    new THREE.CylinderGeometry(.55,.65,.12,18),
-    new THREE.MeshStandardMaterial({color:isSelected?0xffffff:color,metalness:.15,roughness:.5})
+  const collar=new THREE.Mesh(new THREE.CylinderGeometry(.2,.2,.16,18),accentMat);
+  collar.position.set(0,.47,.08);
+  collar.userData=g.userData;
+  g.add(collar);
+
+  const baseDisc=new THREE.Mesh(new THREE.CylinderGeometry(.55,.58,.14,28),standMat);
+  baseDisc.position.set(0,.07,.08);
+  baseDisc.userData=g.userData;
+  g.add(baseDisc);
+
+  for(const ang of [20,92,164,236,308]){
+    const r=THREE.MathUtils.degToRad(ang);
+    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.045,.045,.05,12),new THREE.MeshStandardMaterial({color:0xe5e7eb,metalness:.85,roughness:.18}));
+    bolt.position.set(Math.cos(r)*.36,.13,Math.sin(r)*.36+.08);
+    bolt.userData=g.userData;
+    g.add(bolt);
+  }
+
+  const ribShape=[-0.26,0,.26];
+  ribShape.forEach((x)=>{
+    const rib=new THREE.Mesh(new THREE.BoxGeometry(.08,.18,.24),standMat);
+    rib.position.set(x,.18,.08);
+    rib.userData=g.userData;
+    g.add(rib);
+  });
+
+  const beamRange=Math.min(Number(c.range||(LENS[String(c.lens)]||LENS['2.8']).range),8);
+  const beamFov=THREE.MathUtils.degToRad((LENS[String(c.lens)]||LENS['2.8']).fov);
+  const beamRadius=Math.max(.35,Math.tan(beamFov/2)*beamRange*.55);
+  const beam=new THREE.Mesh(
+    new THREE.CylinderGeometry(.04,beamRadius,beamRange,4,1,true),
+    new THREE.MeshBasicMaterial({color:0x93c5fd,transparent:true,opacity:.12,side:THREE.DoubleSide,depthWrite:false})
   );
-  ring.position.y=.06;
-  ring.userData=g.userData;
-  g.add(ring);
+  beam.rotation.x=-Math.PI/2;
+  beam.position.set(0,2.74,-(.86+beamRange/2));
+  beam.userData={kind:'camera-coverage',id:c.id};
+  if(c.showFov!==false)g.add(beam);
 
   return g;
 }
