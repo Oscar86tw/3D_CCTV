@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.3';
+import { APP_CONFIG } from './config.js?v=2.4';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v23-api-url';
+const API_CACHE_KEY='utop-cctv-v24-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -17,6 +17,62 @@ const COLORS={existing:0xdc2626,new:0xeab308,fault:0xf97316};
 const FLOORS=['RF','R1F','1MF','1F','2F','3F','B1','B2','B3','B4','B5','B6','自訂'];
 let db,currentProject=null,currentScene=null,selected={kind:null,id:null},mode='select',drag=null,floorPlane=null;
 let uiState=loadUIState();
+
+let cloudLoadCancelRequested=false;
+let cloudLoadStartedAt=0;
+let cloudLoadTimer=null;
+
+function formatBytes(bytes){
+  const n=Number(bytes||0);
+  if(n<1024)return `${n} B`;
+  if(n<1024*1024)return `${(n/1024).toFixed(1)} KB`;
+  return `${(n/1024/1024).toFixed(2)} MB`;
+}
+
+function openCloudLoadModal(projectName){
+  cloudLoadCancelRequested=false;
+  if($('cancelCloudLoadBtn')){$('cancelCloudLoadBtn').disabled=false;$('cancelCloudLoadBtn').textContent='取消讀取';}
+  cloudLoadStartedAt=Date.now();
+  $('cloudLoadProjectName').textContent=projectName||'雲端專案';
+  $('cloudLoadModal').classList.remove('hidden');
+  $('cloudLoadModal').querySelector('.cloud-load-card')?.classList.remove('is-error','is-done');
+  setCloudLoadProgress(2,'準備連線 Google Drive','正在建立 Apps Script / Google Drive 讀取工作階段。',1,0,0);
+  clearInterval(cloudLoadTimer);
+  cloudLoadTimer=setInterval(()=>{
+    const sec=Math.max(0,Math.floor((Date.now()-cloudLoadStartedAt)/1000));
+    if($('cloudLoadElapsed'))$('cloudLoadElapsed').textContent=`${sec} 秒`;
+  },500);
+}
+
+function closeCloudLoadModal(delay=0){
+  const close=()=>{
+    clearInterval(cloudLoadTimer);
+    cloudLoadTimer=null;
+    $('cloudLoadModal')?.classList.add('hidden');
+  };
+  if(delay)setTimeout(close,delay);else close();
+}
+
+function setCloudLoadProgress(percent,stage,subtext,step=1,loadedBytes=0,totalBytes=0){
+  const pct=Math.max(0,Math.min(100,Math.round(Number(percent||0))));
+  if($('cloudProgressBar'))$('cloudProgressBar').style.width=`${pct}%`;
+  if($('cloudLoadPercent'))$('cloudLoadPercent').textContent=`${pct}%`;
+  if($('cloudLoadStage'))$('cloudLoadStage').textContent=stage||'處理中…';
+  if($('cloudLoadSubtext'))$('cloudLoadSubtext').textContent=subtext||'';
+  if($('cloudLoadStep'))$('cloudLoadStep').textContent=`${step} / 6`;
+  if($('cloudLoadBytes')){
+    $('cloudLoadBytes').textContent=totalBytes
+      ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}`
+      : formatBytes(loadedBytes);
+  }
+}
+
+function throwIfCloudLoadCancelled(){
+  if(cloudLoadCancelRequested){
+    throw new Error('使用者已取消雲端專案讀取');
+  }
+}
+
 
 function uid(p='id'){return `${p}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`}
 function clone(v){return JSON.parse(JSON.stringify(v))}
@@ -146,14 +202,106 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 async function listCloudProjects(){const r=await jsonpGet('listProjects',{},45000);if(!r?.ok)throw new Error(r?.message||'讀取雲端專案失敗');return Array.isArray(r.projects)?r.projects:[]}
 async function pollCloud(predicate,{timeout=60000,interval=1500}={}){const start=Date.now();let last=[];while(Date.now()-start<timeout){last=await listCloudProjects();if(predicate(last))return last;await sleep(interval)}throw new Error('雲端狀態確認逾時')}
 async function getCloudProjectChunked(projectId){
-  const parts=[];let offset=0;const limit=100000;
-  for(let i=0;i<160;i++){
-    const r=await jsonpGet('getProjectChunk',{projectId,offset,limit},30000);
-    if(!r?.ok)throw new Error(r?.message||'分段讀取失敗');parts.push(String(r.chunk||''));offset=Number(r.nextOffset||offset);
-    $('statusText').textContent=`正在讀取雲端專案… ${Math.round(Number(r.progress||0)*100)}%`;
-    if(r.done){const wrapper=JSON.parse(parts.join(''));return wrapper.project||wrapper.data||wrapper;}
+  const parts=[];
+  let offset=0;
+  const limit=400000; // V2.4：由 100KB 提升為 400KB，減少往返次數。
+  let totalLength=0;
+
+  setCloudLoadProgress(
+    8,
+    '正在取得 Google Drive 專案',
+    '正在向 Apps Script 要求專案內容，第一個資料區塊通常會稍久一些。',
+    2,
+    0,
+    0
+  );
+
+  for(let i=0;i<80;i++){
+    throwIfCloudLoadCancelled();
+
+    const chunkNo=i+1;
+    if(i>0){
+      setCloudLoadProgress(
+        Math.max(10, Math.round((offset/Math.max(totalLength,1))*78)),
+        `正在下載專案資料｜第 ${chunkNo} 段`,
+        '大型平面圖會包含圖片資料，因此雲端專案可能需要分段下載。',
+        3,
+        offset,
+        totalLength
+      );
+    }
+
+    const r=await jsonpGet(
+      'getProjectChunk',
+      {projectId,offset,limit},
+      45000
+    );
+
+    throwIfCloudLoadCancelled();
+
+    if(!r?.ok)throw new Error(r?.message||'分段讀取失敗');
+
+    const chunk=String(r.chunk||'');
+    parts.push(chunk);
+
+    totalLength=Number(r.totalLength||totalLength||0);
+    offset=Number(r.nextOffset||offset+chunk.length);
+
+    const readPct=Number(r.progress||0);
+    const visualPct=10+Math.round(readPct*72);
+
+    setCloudLoadProgress(
+      visualPct,
+      `正在下載專案資料｜第 ${chunkNo} 段`,
+      r.done
+        ? '雲端資料下載完成，準備解析專案內容。'
+        : `已完成 ${Math.round(readPct*100)}%，請稍候。`,
+      3,
+      offset,
+      totalLength
+    );
+
+    if(r.done){
+      throwIfCloudLoadCancelled();
+
+      setCloudLoadProgress(
+        85,
+        '正在組合專案資料',
+        `已完成 ${chunkNo} 個資料區塊，正在合併並檢查 JSON 格式。`,
+        4,
+        offset,
+        totalLength
+      );
+
+      await new Promise(resolve=>setTimeout(resolve,30));
+
+      const raw=parts.join('');
+      let wrapper;
+      try{
+        wrapper=JSON.parse(raw);
+      }catch(err){
+        throw new Error(`專案資料下載完成，但 JSON 解析失敗：${err.message}`);
+      }
+
+      setCloudLoadProgress(
+        90,
+        '專案資料解析完成',
+        '正在準備寫入本機快取，接著載入 3D 場景。',
+        4,
+        offset,
+        totalLength
+      );
+
+      return {
+        project:wrapper.project||wrapper.data||wrapper,
+        loadedBytes:offset,
+        totalBytes:totalLength,
+        chunkCount:chunkNo
+      };
+    }
   }
-  throw new Error('雲端專案分段數量超過上限');
+
+  throw new Error('雲端專案分段數量超過安全上限');
 }
 
 function setCloudDiagnostics(message,details=''){
@@ -182,8 +330,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.2'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.2`);
+    if(apiVersion!=='2.4'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.4`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -225,12 +373,104 @@ async function renderCloudProjectCards(){
 }
 
 async function openCloudProject(projectId){
+  const meta=cloudProjects.find(p=>String(p.projectId)===String(projectId));
+  const projectName=meta?.projectName||'雲端專案';
+
+  openCloudLoadModal(projectName);
+  setCloudStatus(false,'讀取中',true);
+
   try{
-    setCloudStatus(false,'讀取中',true);
-    const p=await getCloudProjectChunked(projectId);if(!p?.name)throw new Error('雲端專案格式不正確');
-    await dbPut(p);setCloudStatus(true,'雲端已連線');await openProject(p.id);toast('已從 Google Drive 開啟專案');
-  }catch(err){setCloudStatus(false,'讀取失敗');alert(`雲端讀取失敗：${err.message}`)}
+    setCloudLoadProgress(
+      4,
+      '正在確認雲端連線',
+      '確認 Apps Script API 與 Google Drive 專案索引。',
+      1,
+      0,
+      0
+    );
+
+    const ping=await jsonpGet('ping',{},30000);
+    throwIfCloudLoadCancelled();
+    if(!ping?.ok)throw new Error(ping?.message||'Apps Script ping 失敗');
+
+    setCloudLoadProgress(
+      7,
+      '雲端連線正常',
+      `Apps Script API ${ping.apiVersion||'未知'} 已回應，開始讀取「${projectName}」。`,
+      1,
+      0,
+      0
+    );
+
+    const result=await getCloudProjectChunked(projectId);
+    const p=result.project;
+
+    if(!p?.name)throw new Error('雲端專案格式不正確');
+
+    throwIfCloudLoadCancelled();
+
+    setCloudLoadProgress(
+      93,
+      '正在建立本機快取',
+      '將雲端專案保存到瀏覽器，之後再次開啟會更方便。',
+      5,
+      result.loadedBytes,
+      result.totalBytes
+    );
+
+    await dbPut(p);
+
+    throwIfCloudLoadCancelled();
+
+    setCloudLoadProgress(
+      97,
+      '正在建立 3D 場景',
+      '正在載入樓層、平面圖、鏡頭與標記資料。',
+      6,
+      result.loadedBytes,
+      result.totalBytes
+    );
+
+    setCloudStatus(true,'雲端已連線');
+    await openProject(p.id);
+
+    setCloudLoadProgress(
+      100,
+      '專案開啟完成',
+      `「${p.name}」已完成載入，共讀取 ${formatBytes(result.loadedBytes)}。`,
+      6,
+      result.loadedBytes,
+      result.totalBytes
+    );
+
+    $('cloudLoadModal').querySelector('.cloud-load-card')?.classList.add('is-done');
+    toast('已從 Google Drive 開啟專案');
+    closeCloudLoadModal(700);
+  }catch(err){
+    if(String(err.message||'').includes('使用者已取消')){
+      setCloudStatus(true,'雲端已連線');
+      closeCloudLoadModal();
+      toast('已取消讀取');
+      return;
+    }
+
+    $('cloudLoadModal').querySelector('.cloud-load-card')?.classList.add('is-error');
+    setCloudLoadProgress(
+      Number($('cloudLoadPercent')?.textContent?.replace('%','')||0),
+      '雲端專案讀取失敗',
+      err.message||String(err),
+      6,
+      0,
+      0
+    );
+    setCloudStatus(false,'讀取失敗');
+
+    // 錯誤狀態保留，讓使用者看得到停在哪一步。
+    if($('cancelCloudLoadBtn'))$('cancelCloudLoadBtn').textContent='關閉';
+    console.warn('openCloudProject error:',err);
+  }
 }
+
 async function saveProjectCloud(project){
   const revision=`${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
   project.cloudRevision=revision;
@@ -308,6 +548,23 @@ $('zoomInBtn').onclick=()=>zoom(.82);$('zoomOutBtn').onclick=()=>zoom(1.22);$('r
 async function exportProject(){if(!currentProject)return;await saveProject(false);const blob=new Blob([JSON.stringify({format:'UTOP-CCTV3D',formatVersion:2,appVersion:APP_VERSION,project:clone(currentProject)},null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=`${currentProject.name.replace(/[\\/:*?"<>|]+/g,'-')}-${APP_VERSION}.cctv3d`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}$('exportProjectBtn').onclick=exportProject;
 $('importProjectBtn').onclick=()=>$('importProjectFile').click();$('importProjectFile').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const x=JSON.parse(await f.text()),p=x.project||x;if(!p?.name)throw new Error('格式不正確');p.id=uid('project');p.updatedAt=now();p.version=APP_VERSION;await dbPut(p);renderProjectCards();toast('專案已匯入')}catch(err){alert(`匯入失敗：${err.message}`)}e.target.value=''};$('deleteProjectBtn').onclick=async()=>{if(currentProject&&confirm(`確定刪除專案「${currentProject.name}」？`)){await dbDelete(currentProject.id);goHome()}};$('refreshProjectListBtn').onclick=renderProjectCards;if($('refreshCloudProjectsBtn'))$('refreshCloudProjectsBtn').onclick=()=>{activeApiUrl='';renderCloudProjectCards()};
 
+
+
+if($('cancelCloudLoadBtn'))$('cancelCloudLoadBtn').onclick=()=>{
+  const stage=$('cloudLoadStage')?.textContent||'';
+  if(stage.includes('失敗')||stage.includes('完成')){
+    closeCloudLoadModal();
+    $('cancelCloudLoadBtn').textContent='取消讀取';
+    return;
+  }
+  cloudLoadCancelRequested=true;
+  $('cancelCloudLoadBtn').disabled=true;
+  $('cancelCloudLoadBtn').textContent='正在取消…';
+  setTimeout(()=>{
+    $('cancelCloudLoadBtn').disabled=false;
+    $('cancelCloudLoadBtn').textContent='取消讀取';
+  },1000);
+};
 
 if($('retryCloudBtn'))$('retryCloudBtn').onclick=()=>{activeApiUrl='';renderCloudProjectCards();};
 if($('copyCloudDiagBtn'))$('copyCloudDiagBtn').onclick=async()=>{

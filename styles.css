@@ -17,3 +17,44 @@
 .cloud-diagnostics-actions button{
   border:1px solid #35586f;background:#132838;color:#e7f4fb;border-radius:8px;padding:7px 10px
 }
+
+.cloud-load-modal{
+  position:fixed;inset:0;z-index:250;display:grid;place-items:center;
+  background:rgba(2,8,14,.74);backdrop-filter:blur(4px);
+}
+.cloud-load-card{
+  width:min(560px,92vw);background:#0d1923;border:1px solid #315067;border-radius:18px;
+  padding:20px;box-shadow:0 28px 90px rgba(0,0,0,.55)
+}
+.cloud-load-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.cloud-load-head h3{margin:5px 0 0;font-size:20px}
+.cloud-load-percent{
+  min-width:66px;text-align:center;border:1px solid #2d6874;background:#0e2a31;color:#8ce9f5;
+  border-radius:999px;padding:7px 10px;font-weight:900
+}
+.cloud-load-project{margin:18px 0 10px;font-size:16px;font-weight:800;color:#e9f5fb}
+.cloud-progress-track{
+  height:12px;background:#09131c;border:1px solid #263d4f;border-radius:999px;overflow:hidden
+}
+.cloud-progress-bar{
+  height:100%;background:linear-gradient(90deg,#1593a4,#2bc2d4);transition:width .2s ease
+}
+.cloud-load-stage{margin-top:13px;font-size:14px;font-weight:800;color:#d8edf5}
+.cloud-load-details{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px
+}
+.cloud-load-details>div{
+  background:#111f2b;border:1px solid #243a4b;border-radius:10px;padding:9px;text-align:center
+}
+.cloud-load-details span{display:block;font-size:9px;color:#7f96a8;margin-bottom:4px}
+.cloud-load-details b{font-size:12px}
+.cloud-load-subtext{margin-top:12px;color:#8da6b7;font-size:11px;line-height:1.6;min-height:36px}
+.cloud-load-actions{display:flex;justify-content:flex-end;margin-top:14px}
+.cloud-load-actions button{
+  border:1px solid #5b3640;background:#28191e;color:#ffb0b9;border-radius:8px;padding:8px 12px
+}
+.cloud-load-card.is-error{border-color:#7b2f3a}
+.cloud-load-card.is-done{border-color:#246c56}
+@media(max-width:600px){
+  .cloud-load-details{grid-template-columns:1fr}
+}

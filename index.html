@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>昱拓弱電｜3D CCTV 編輯器 V2.3</title>
-  <link rel="stylesheet" href="styles.css?v=2.3">
+  <title>昱拓弱電｜3D CCTV 編輯器 V2.4</title>
+  <link rel="stylesheet" href="styles.css?v=2.4">
 </head>
 <body>
 <section id="projectHome" class="project-home">
@@ -14,7 +14,7 @@
       <h1>3D CCTV 專案中心</h1>
       <p>先建立社區專案，再建立樓層／場景、匯入平面圖，最後進行 CCTV 3D 配置。</p>
     </div>
-    <span class="version">V2.3</span>
+    <span class="version">V2.4</span>
   </header>
   <div class="home-actions">
     <button id="newProjectBtn" class="primary big">＋ 建立新專案</button>
@@ -52,7 +52,7 @@
       <button data-menu="view">視角</button>
       <button data-menu="report">報告</button>
     </nav>
-    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.3</span></div>
+    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.4</span></div>
   </header>
 
   <div id="editorGrid" class="editor-grid">
@@ -121,8 +121,41 @@
 
 <div id="newProjectModal" class="modal hidden"><div class="modal-card"><div class="modal-head"><div><div class="kicker">NEW PROJECT</div><h3>建立新專案</h3></div><button data-close="newProjectModal">×</button></div><label>專案名稱<input id="newProjectName" type="text" placeholder="例：樺龍潮+ 社區"></label><label>案場類型<select id="newProjectType"><option>社區住宅</option><option>商辦</option><option>工廠</option><option>停車場</option><option>其他</option></select></label><label>地址（選填）<input id="newProjectAddress" type="text"></label><label>備註（選填）<textarea id="newProjectNote" rows="4"></textarea></label><div class="modal-actions"><button data-close="newProjectModal">取消</button><button id="createProjectConfirmBtn" class="primary">建立專案</button></div></div></div>
 <div id="newSceneModal" class="modal hidden"><div class="modal-card small-card"><div class="modal-head"><div><div class="kicker">NEW SCENE</div><h3>新增樓層 / 場景</h3></div><button data-close="newSceneModal">×</button></div><label>樓層<select id="newSceneType"><option>RF</option><option>R1F</option><option>1MF</option><option>1F</option><option>2F</option><option>3F</option><option>B1</option><option>B2</option><option>B3</option><option>B4</option><option>B5</option><option>B6</option><option>自訂</option></select></label><label>場景名稱<input id="newSceneName" type="text" placeholder="例：B1 地下停車場"></label><div class="modal-actions"><button data-close="newSceneModal">取消</button><button id="createSceneConfirmBtn" class="primary">建立</button></div></div></div>
+
+<div id="cloudLoadModal" class="cloud-load-modal hidden" role="dialog" aria-modal="true" aria-labelledby="cloudLoadTitle">
+  <div class="cloud-load-card">
+    <div class="cloud-load-head">
+      <div>
+        <div class="kicker">GOOGLE DRIVE</div>
+        <h3 id="cloudLoadTitle">正在開啟雲端專案</h3>
+      </div>
+      <span id="cloudLoadPercent" class="cloud-load-percent">0%</span>
+    </div>
+
+    <div class="cloud-load-project" id="cloudLoadProjectName">—</div>
+
+    <div class="cloud-progress-track">
+      <div id="cloudProgressBar" class="cloud-progress-bar" style="width:0%"></div>
+    </div>
+
+    <div id="cloudLoadStage" class="cloud-load-stage">準備讀取…</div>
+
+    <div class="cloud-load-details">
+      <div><span>目前步驟</span><b id="cloudLoadStep">1 / 6</b></div>
+      <div><span>讀取資料</span><b id="cloudLoadBytes">0 KB</b></div>
+      <div><span>已用時間</span><b id="cloudLoadElapsed">0 秒</b></div>
+    </div>
+
+    <div id="cloudLoadSubtext" class="cloud-load-subtext">正在準備 Google Drive 專案資料。</div>
+
+    <div class="cloud-load-actions">
+      <button id="cancelCloudLoadBtn">取消讀取</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
-<script type="module" src="app.js?v=2.3"></script>
+<script type="module" src="app.js?v=2.4"></script>
 </body>
 </html>
