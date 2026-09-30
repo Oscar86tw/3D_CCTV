@@ -1,1376 +1,614 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.13';
 
-const $=id=>document.getElementById(id);
-const APP_VERSION=APP_CONFIG.version;
-const DB_NAME='UTOP_CCTV_V2';
-const STORE_NAME='projects';
-const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v213-api-url';
-let cloudProjects=[];
-let cloudConnected=false;
-let activeApiUrl='';
-let jsonpSeq=0;
-const LENS={'2.8':{fov:102,range:14},'3.6':{fov:84,range:17},'4':{fov:76,range:18},'6':{fov:53,range:25},'8':{fov:40,range:32}};
-const COLORS={existing:0xdc2626,new:0xeab308,fault:0xf97316};
-const FLOORS=['RF','R1F','1MF','1F','2F','3F','B1','B2','B3','B4','B5','B6','自訂'];
-let db,currentProject=null,currentScene=null,selected={kind:null,id:null},mode='select',drag=null,floorPlane=null;
-let uiState=loadUIState();
-let draftWall={points:[],mousePoint:null};
-let newCameraStars=[];
+const APP_VERSION = 'V1.16';
+const DEFAULT_COMMUNITY_ID = 'hualong-chao-plus';
+const CATALOG_KEY = 'cctv3d-site-catalog-v1-16';
+const WORKING_KEY = 'cctv3d-working-v1-16';
+const STORE_KEY = 'cctv3d-project-store-v1-16';
+const PREV_STORE_KEYS = ['cctv3d-project-store-v1-15','cctv3d-project-store-v1-14','cctv3d-project-store-v1-13','cctv3d-project-store-v1-12','cctv3d-project-store-v1-11','cctv3d-project-store-v1-10','cctv3d-project-store-v1-9','cctv3d-project-store-v1-8','cctv3d-project-store-v1-7','cctv3d-project-store-v1-6'];
+const PX_TO_UNIT = 0.04; // 所有圖面 X/Z 使用同一縮放係數，不改變圖紙長寬比例
 
-let cloudLoadCancelRequested=false;
-let cloudLoadStartedAt=0;
-let cloudLoadTimer=null;
+const CAMERA_COLOR_PRESETS = {
+  red:    { label:'原建置', body:0xdc2626, cone:0xef4444, line:0xf87171 },
+  blue:   { label:'藍',     body:0x2563eb, cone:0x3b82f6, line:0x60a5fa },
+  orange: { label:'故障',   body:0xea580c, cone:0xf97316, line:0xfb923c },
+  yellow: { label:'增設',   body:0xca8a04, cone:0xeab308, line:0xfacc15 },
+  green:  { label:'綠',     body:0x16a34a, cone:0x22c55e, line:0x4ade80 },
+  purple: { label:'紫',     body:0x7c3aed, cone:0x8b5cf6, line:0xa78bfa },
+  gray:   { label:'灰',     body:0x4b5563, cone:0x6b7280, line:0x9ca3af }
+};
+const LENS_PRESETS = {
+  '2.8': { fov:102, range:14 },
+  '3.6': { fov:84, range:17 },
+  '4':   { fov:76, range:18 },
+  '6':   { fov:53, range:25 },
+  '8':   { fov:40, range:32 }
+};
 
-function formatBytes(bytes){
-  const n=Number(bytes||0);
-  if(n<1024)return `${n} B`;
-  if(n<1024*1024)return `${(n/1024).toFixed(1)} KB`;
-  return `${(n/1024/1024).toFixed(2)} MB`;
+const $ = id => document.getElementById(id);
+const els = {
+  viewer:$('viewer'), floorTitle:$('floorTitle'), floorChip:$('floorChip'), statusText:$('statusText'),
+  cameraCount:$('cameraCount'), moduleCount:$('moduleCount'), selectedFov:$('selectedFov'), selectedType:$('selectedType'),
+  versionBadge:$('versionBadge'), footerVersionInline:$('footerVersionInline'), addHint:$('addHint'),
+  noCamera:$('noCamera'), cameraForm:$('cameraForm'), noModule:$('noModule'), moduleForm:$('moduleForm'),
+  itemList:$('itemList'), listFilter:$('listFilter'), cameraLegend:$('cameraLegend'),
+  projectFolder:$('projectFolder'), projectName:$('projectName'), projectList:$('projectList'), savedCount:$('savedCount'),
+  communitySelect:$('communitySelect'), floorSelect:$('floorSelect'), floorPlanInfo:$('floorPlanInfo'),
+  scaleBadge:$('scaleBadge'), calibrationMeters:$('calibrationMeters'), calibrationWorld:$('calibrationWorld'), calibrationStatus:$('calibrationStatus')
+};
+const floorTabsNav = document.querySelector('.floor-tabs');
+
+const camInputs = {
+  name:$('camName'), lens:$('camLens'), lensFov:$('camLensFov'), color:$('camColor'), colorLabel:$('camColorLabel'), fixed:$('camFixed'),
+  fov:$('camFov'), fovOut:$('camFovOut'), range:$('camRange'), rangeOut:$('camRangeOut'), yaw:$('camYaw'), yawOut:$('camYawOut'), note:$('camNote')
+};
+const modInputs = {
+  name:$('modName'), type:$('modType'), length:$('modLength'), width:$('modWidth'), height:$('modHeight'), thickness:$('modThickness'), angle:$('modAngle'), angleOut:$('modAngleOut'), fixed:$('modFixed'), occludes:$('modOccludes'),
+  widthWrap:$('modWidthWrap'), thicknessWrap:$('modThicknessWrap'), occludeWrap:$('modOccludeWrap')
+};
+
+els.versionBadge.textContent = APP_VERSION;
+els.footerVersionInline.textContent = APP_VERSION;
+Object.entries(CAMERA_COLOR_PRESETS).forEach(([key, info]) => {
+  const opt = document.createElement('option'); opt.value = key; opt.textContent = `${info.label}（${key}）`; camInputs.color.appendChild(opt);
+});
+els.cameraLegend.innerHTML = Object.entries(CAMERA_COLOR_PRESETS).map(([,info]) => `<span class="legend-chip"><span class="legend-dot" style="background:#${info.body.toString(16).padStart(6,'0')}"></span>${info.label}</span>`).join('');
+
+function defaultCatalog(){
+  return { communities:[{ id:DEFAULT_COMMUNITY_ID, name:'樺龍潮+ 社區', floors:[
+    { id:'B1', name:'B1 地下一層', sourceType:'builtin', texture:'assets/b1-plan.png', widthPx:2530, heightPx:1980 },
+    { id:'B2', name:'B2 地下二層', sourceType:'builtin', texture:'assets/b2-plan.png', widthPx:2530, heightPx:1980 }
+  ]}] };
 }
-
-function openCloudLoadModal(projectName){
-  cloudLoadCancelRequested=false;
-  if($('cancelCloudLoadBtn')){$('cancelCloudLoadBtn').disabled=false;$('cancelCloudLoadBtn').textContent='取消讀取';}
-  cloudLoadStartedAt=Date.now();
-  $('cloudLoadProjectName').textContent=projectName||'雲端專案';
-  $('cloudLoadModal').classList.remove('hidden');
-  $('cloudLoadModal').querySelector('.cloud-load-card')?.classList.remove('is-error','is-done');
-  setCloudLoadProgress(2,'準備連線 Google Drive','正在建立 Apps Script / Google Drive 讀取工作階段。',1,0,0);
-  clearInterval(cloudLoadTimer);
-  cloudLoadTimer=setInterval(()=>{
-    const sec=Math.max(0,Math.floor((Date.now()-cloudLoadStartedAt)/1000));
-    if($('cloudLoadElapsed'))$('cloudLoadElapsed').textContent=`${sec} 秒`;
-  },500);
-}
-
-function closeCloudLoadModal(delay=0){
-  const close=()=>{
-    clearInterval(cloudLoadTimer);
-    cloudLoadTimer=null;
-    $('cloudLoadModal')?.classList.add('hidden');
-  };
-  if(delay)setTimeout(close,delay);else close();
-}
-
-function setCloudLoadProgress(percent,stage,subtext,step=1,loadedBytes=0,totalBytes=0){
-  const pct=Math.max(0,Math.min(100,Math.round(Number(percent||0))));
-  if($('cloudProgressBar'))$('cloudProgressBar').style.width=`${pct}%`;
-  if($('cloudLoadPercent'))$('cloudLoadPercent').textContent=`${pct}%`;
-  if($('cloudLoadStage'))$('cloudLoadStage').textContent=stage||'處理中…';
-  if($('cloudLoadSubtext'))$('cloudLoadSubtext').textContent=subtext||'';
-  if($('cloudLoadStep'))$('cloudLoadStep').textContent=`${step} / 6`;
-  if($('cloudLoadBytes')){
-    $('cloudLoadBytes').textContent=totalBytes
-      ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}`
-      : formatBytes(loadedBytes);
-  }
-}
-
-function throwIfCloudLoadCancelled(){
-  if(cloudLoadCancelRequested){
-    throw new Error('使用者已取消雲端專案讀取');
-  }
-}
-
-
-function uid(p='id'){return `${p}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`}
-function clone(v){return JSON.parse(JSON.stringify(v))}
-function now(){return new Date().toISOString()}
-function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function toast(msg){$('toast').textContent=msg;$('toast').classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>$('toast').classList.add('hidden'),2200)}
-function loadUIState(){try{return JSON.parse(localStorage.getItem(UI_KEY)||'{}')}catch{return{}}}
-function saveUIState(){localStorage.setItem(UI_KEY,JSON.stringify(uiState))}
-
-function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains(STORE_NAME))d.createObjectStore(STORE_NAME,{keyPath:'id'})};r.onsuccess=()=>{db=r.result;resolve()};r.onerror=()=>reject(r.error)})}
-function dbPut(p){return new Promise((resolve,reject)=>{const t=db.transaction(STORE_NAME,'readwrite');t.objectStore(STORE_NAME).put(p);t.oncomplete=()=>resolve(p);t.onerror=()=>reject(t.error)})}
-function dbGet(id){return new Promise((resolve,reject)=>{const r=db.transaction(STORE_NAME).objectStore(STORE_NAME).get(id);r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>reject(r.error)})}
-function dbDelete(id){return new Promise((resolve,reject)=>{const r=db.transaction(STORE_NAME,'readwrite').objectStore(STORE_NAME).delete(id);r.onsuccess=resolve;r.onerror=()=>reject(r.error)})}
-function dbAll(){return new Promise((resolve,reject)=>{const r=db.transaction(STORE_NAME).objectStore(STORE_NAME).getAll();r.onsuccess=()=>resolve((r.result||[]).sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt))));r.onerror=()=>reject(r.error)})}
-
-function setCloudStatus(ok,text,working=false){
-  cloudConnected=!!ok;
-  const cls=working?'syncing':ok?'online':'offline';
-  const home=$('homeCloudStatus'),editor=$('editorCloudStatus');
-  if(home){home.className=`cloud-badge ${cls}`;home.textContent=text|| (ok?'雲端已連線':'雲端未連線');}
-  if(editor){editor.className=`cloud-badge ${cls}`;editor.textContent=text|| (ok?'雲端已連線':'雲端未連線');}
-}
-function parseCsvCell(text){let s=String(text||'').trim();if(s.startsWith('"')&&s.endsWith('"'))s=s.slice(1,-1).replace(/""/g,'"');return s.trim()}
-async function getApiUrl(force=false){
-  if(!APP_CONFIG.cloudApi?.enabled)throw new Error('雲端 API 尚未啟用');
-  if(!force&&activeApiUrl)return activeApiUrl;
-
-  // V2.2：使用 config.js 內明確指定的正式 /exec 為第一優先。
-  // 不再讓 Google Sheets B1 的讀取阻塞網站首次雲端連線。
-  const configured=String(APP_CONFIG.cloudApi.apiUrl||'').trim().replace(/\?.*$/,'');
-  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(configured)){
-    activeApiUrl=configured;
-    localStorage.setItem(API_CACHE_KEY,configured);
-    return configured;
-  }
-
-  const cached=String(localStorage.getItem(API_CACHE_KEY)||'').trim().replace(/\?.*$/,'');
-  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(cached)){
-    activeApiUrl=cached;
-    return cached;
-  }
-
-  // 最後才嘗試工作表1!B2。
+function loadCatalog(){
   try{
-    const sheet=encodeURIComponent(APP_CONFIG.cloudApi.configSheet||'工作表1');
-    const cell=encodeURIComponent(APP_CONFIG.cloudApi.apiCell||'B1');
-    const url=`https://docs.google.com/spreadsheets/d/${APP_CONFIG.googleSheetId}/gviz/tq?tqx=out:csv&sheet=${sheet}&range=${cell}&_=${Date.now()}`;
-    const res=await fetch(url,{cache:'no-store'});
-    if(!res.ok)throw new Error(`B2 HTTP ${res.status}`);
-    const b1=parseCsvCell(await res.text()).replace(/\?.*$/,'');
-    if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(b1)){
-      activeApiUrl=b1;
-      localStorage.setItem(API_CACHE_KEY,b1);
-      return b1;
-    }
-  }catch(err){
-    console.warn('工作表1!B2 備援讀取失敗：',err);
-  }
-
-  throw new Error('沒有可用的 Apps Script /exec');
+    const parsed = JSON.parse(localStorage.getItem(CATALOG_KEY) || localStorage.getItem('cctv3d-site-catalog-v1-15') || localStorage.getItem('cctv3d-site-catalog-v1-14') || localStorage.getItem('cctv3d-site-catalog-v1-13') || localStorage.getItem('cctv3d-site-catalog-v1-12') || localStorage.getItem('cctv3d-site-catalog-v1-11') || localStorage.getItem('cctv3d-site-catalog-v1-10') || localStorage.getItem('cctv3d-site-catalog-v1-9') || 'null');
+    if(parsed?.communities?.length) return parsed;
+  }catch{}
+  const d = defaultCatalog(); localStorage.setItem(CATALOG_KEY, JSON.stringify(d)); return d;
 }
+function saveCatalog(){ localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog)); }
+let catalog = loadCatalog();
 
-function jsonpGet(action,params={},timeoutMs=30000){
-  return new Promise(async(resolve,reject)=>{
-    try{
-      const base=await getApiUrl();
-      const cb=`__cctvV22_${Date.now()}_${++jsonpSeq}`;
-      const u=new URL(base);
-      u.searchParams.delete('action');
-      u.searchParams.delete('callback');
-      u.searchParams.set('action',action);
-      u.searchParams.set('callback',cb);
-      u.searchParams.set('_ts',Date.now());
-      Object.entries(params).forEach(([k,v])=>{
-        if(v!==undefined&&v!==null)u.searchParams.set(k,String(v));
-      });
+function currentCommunity(){ return catalog.communities.find(c => c.id === state.communityId) || catalog.communities[0]; }
+function currentFloorMeta(){ const c = currentCommunity(); return c?.floors.find(f => f.id === state.floor) || c?.floors[0] || null; }
+function currentKey(){ return `${state.communityId}::${state.floor}`; }
+function ensureDataSlot(obj, key=currentKey()){ if(!obj[key]) obj[key] = []; return obj[key]; }
+function currentCameras(){ return ensureDataSlot(state.cameras); }
+function currentModules(){ return ensureDataSlot(state.modules); }
+function getCalibration(){ return state.calibrations[currentKey()] || null; }
+function unitsPerMeter(){ return getCalibration()?.unitsPerMeter || 1; }
+function metersToWorld(m){ return Number(m) * unitsPerMeter(); }
+function worldToMeters(u){ return Number(u) / unitsPerMeter(); }
+function floorWorldSize(){ const f = currentFloorMeta(); return { width:(f?.widthPx || 2530)*PX_TO_UNIT, depth:(f?.heightPx || 1980)*PX_TO_UNIT }; }
 
-      const script=document.createElement('script');
-      script.async=true;
-      let done=false,timer=null;
-
-      const cleanup=(late=false)=>{
-        if(done)return;
-        done=true;
-        if(timer)clearTimeout(timer);
-        script.remove();
-        if(late){
-          window[cb]=()=>{};
-          setTimeout(()=>{try{delete window[cb]}catch{}},120000);
-        }else{
-          try{delete window[cb]}catch{}
-        }
-      };
-
-      window[cb]=data=>{
-        cleanup(false);
-        resolve(data);
-      };
-
-      script.onerror=()=>{
-        cleanup(false);
-        reject(new Error(`JSONP API 載入失敗：${action}`));
-      };
-
-      timer=setTimeout(()=>{
-        cleanup(true);
-        reject(new Error(`JSONP API ${action} 逾時（${Math.round(timeoutMs/1000)} 秒）`));
-      },timeoutMs);
-
-      script.src=u.toString();
-      document.head.appendChild(script);
-    }catch(err){
-      reject(err);
-    }
+function migrateFlatData(raw){
+  const result = {};
+  if(!raw) return result;
+  Object.entries(raw).forEach(([k,v]) => {
+    if(k === 'B1' || k === 'B2') result[`${DEFAULT_COMMUNITY_ID}::${k}`] = v;
+    else result[k] = v;
   });
+  return result;
 }
-
-async function formPost(body){
-  const base=await getApiUrl();
-  const frameName=`cctvPost_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const iframe=document.createElement('iframe');iframe.name=frameName;iframe.style.display='none';
-  const form=document.createElement('form');form.method='POST';form.action=base;form.target=frameName;form.style.display='none';form.acceptCharset='UTF-8';
-  const input=document.createElement('input');input.type='hidden';input.name='payload';input.value=JSON.stringify(body);form.appendChild(input);
-  document.body.append(iframe,form);form.submit();setTimeout(()=>{form.remove();iframe.remove()},6000);
-}
-function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-async function listCloudProjects(){const r=await jsonpGet('listProjects',{},45000);if(!r?.ok)throw new Error(r?.message||'讀取雲端專案失敗');return Array.isArray(r.projects)?r.projects:[]}
-async function pollCloud(predicate,{timeout=60000,interval=1500}={}){const start=Date.now();let last=[];while(Date.now()-start<timeout){last=await listCloudProjects();if(predicate(last))return last;await sleep(interval)}throw new Error('雲端狀態確認逾時')}
-async function getCloudProjectChunked(projectId){
-  const parts=[];
-  let offset=0;
-  const limit=400000; // V2.4：由 100KB 提升為 400KB，減少往返次數。
-  let totalLength=0;
-
-  setCloudLoadProgress(
-    8,
-    '正在取得 Google Drive 專案',
-    '正在向 Apps Script 要求專案內容，第一個資料區塊通常會稍久一些。',
-    2,
-    0,
-    0
-  );
-
-  for(let i=0;i<80;i++){
-    throwIfCloudLoadCancelled();
-
-    const chunkNo=i+1;
-    if(i>0){
-      setCloudLoadProgress(
-        Math.max(10, Math.round((offset/Math.max(totalLength,1))*78)),
-        `正在下載專案資料｜第 ${chunkNo} 段`,
-        '大型平面圖會包含圖片資料，因此雲端專案可能需要分段下載。',
-        3,
-        offset,
-        totalLength
-      );
-    }
-
-    const r=await jsonpGet(
-      'getProjectChunk',
-      {projectId,offset,limit},
-      45000
-    );
-
-    throwIfCloudLoadCancelled();
-
-    if(!r?.ok)throw new Error(r?.message||'分段讀取失敗');
-
-    const chunk=String(r.chunk||'');
-    parts.push(chunk);
-
-    totalLength=Number(r.totalLength||totalLength||0);
-    offset=Number(r.nextOffset||offset+chunk.length);
-
-    const readPct=Number(r.progress||0);
-    const visualPct=10+Math.round(readPct*72);
-
-    setCloudLoadProgress(
-      visualPct,
-      `正在下載專案資料｜第 ${chunkNo} 段`,
-      r.done
-        ? '雲端資料下載完成，準備解析專案內容。'
-        : `已完成 ${Math.round(readPct*100)}%，請稍候。`,
-      3,
-      offset,
-      totalLength
-    );
-
-    if(r.done){
-      throwIfCloudLoadCancelled();
-
-      setCloudLoadProgress(
-        85,
-        '正在組合專案資料',
-        `已完成 ${chunkNo} 個資料區塊，正在合併並檢查 JSON 格式。`,
-        4,
-        offset,
-        totalLength
-      );
-
-      await new Promise(resolve=>setTimeout(resolve,30));
-
-      const raw=parts.join('');
-      let wrapper;
-      try{
-        wrapper=JSON.parse(raw);
-      }catch(err){
-        throw new Error(`專案資料下載完成，但 JSON 解析失敗：${err.message}`);
-      }
-
-      setCloudLoadProgress(
-        90,
-        '專案資料解析完成',
-        '正在準備寫入本機快取，接著載入 3D 場景。',
-        4,
-        offset,
-        totalLength
-      );
-
-      return {
-        project:wrapper.project||wrapper.data||wrapper,
-        loadedBytes:offset,
-        totalBytes:totalLength,
-        chunkCount:chunkNo
-      };
-    }
-  }
-
-  throw new Error('雲端專案分段數量超過安全上限');
-}
-
-function setCloudDiagnostics(message,details=''){
-  const box=$('cloudDiagnostics');
-  const text=$('cloudDiagnosticsText');
-  if(!box||!text)return;
-  const full=[message,details].filter(Boolean).join('\n');
-  text.textContent=full;
-  box.classList.toggle('hidden',!full);
-}
-async function testCloudConnection(){
-  activeApiUrl='';
-  const apiUrl=await getApiUrl(true);
-  setCloudDiagnostics('正在測試雲端…',`API：${apiUrl}`);
-  const ping=await jsonpGet('ping',{},30000);
-  if(!ping?.ok)throw new Error(ping?.message||'ping 失敗');
-  return {apiUrl,ping};
-}
-async function renderCloudProjectCards(){
-  const el=$('cloudProjectCards');
-  if(!el)return;
-
-  setCloudStatus(false,'連線中…',true);
-  el.innerHTML='<div class="empty-card">正在測試 Apps Script 與讀取雲端專案…</div>';
-
+function loadWorking(){
+  const base = { communityId:DEFAULT_COMMUNITY_ID, floor:'B1', showPlan:true, listFilter:'camera', cameras:{}, modules:{}, calibrations:{}, selected:{kind:'camera',id:null} };
   try{
-    const {apiUrl,ping}=await testCloudConnection();
-    const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.13'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.13`);
+    const raw = JSON.parse(localStorage.getItem(WORKING_KEY) || localStorage.getItem('cctv3d-working-v1-15') || localStorage.getItem('cctv3d-working-v1-14') || localStorage.getItem('cctv3d-working-v1-13') || localStorage.getItem('cctv3d-working-v1-12') || localStorage.getItem('cctv3d-working-v1-11') || localStorage.getItem('cctv3d-working-v1-10') || localStorage.getItem('cctv3d-working-v1-9') || 'null');
+    if(raw) return { ...base, ...raw, cameras:migrateFlatData(raw.cameras), modules:migrateFlatData(raw.modules), calibrations:raw.calibrations || {} };
+    const prev = JSON.parse(localStorage.getItem('cctv3d-working-v1-8') || localStorage.getItem('cctv3d-working-v1-7') || 'null');
+    if(prev){
+      base.floor = prev.floor || 'B1'; base.showPlan = prev.showPlan !== false; base.listFilter = prev.listFilter || 'camera';
+      base.cameras = migrateFlatData(prev.cameras); base.modules = migrateFlatData(prev.modules); base.selected = prev.selected || base.selected;
     }
-
-    cloudProjects=await listCloudProjects();
-    setCloudStatus(true,`雲端已連線｜${cloudProjects.length} 筆`);
-    setCloudDiagnostics('', '');
-
-    if(!cloudProjects.length){
-      el.innerHTML='<div class="empty-card">雲端已連線。Google Drive 尚無專案；建立專案後按「儲存」即可同步。</div>';
-      return;
-    }
-
-    el.innerHTML=cloudProjects.map(p=>`
-      <article class="project-card cloud-card">
-        <div>
-          <h3>${esc(p.projectName||'未命名專案')}</h3>
-          <div class="meta">${esc(p.siteType||'')}<br>${esc(p.address||'')}</div>
-          <span class="source-pill">Google Drive</span>
-        </div>
-        <div class="card-footer">
-          <span class="meta">${p.updatedAt?new Date(p.updatedAt).toLocaleString():''}</span>
-          <button data-open-cloud="${esc(p.projectId)}">開啟專案</button>
-        </div>
-      </article>
-    `).join('');
-
-    el.querySelectorAll('[data-open-cloud]').forEach(b=>{
-      b.onclick=()=>openCloudProject(b.dataset.openCloud);
-    });
-  }catch(err){
-    const api=activeApiUrl||APP_CONFIG.cloudApi?.apiUrl||'未取得';
-    setCloudStatus(false,'雲端連線失敗');
-    el.innerHTML='<div class="empty-card">雲端尚未連線。請查看下方診斷資訊後按「重新測試」。</div>';
-    setCloudDiagnostics(
-      `錯誤：${err.message}`,
-      `前端：${APP_VERSION}\nAPI：${api}\nGitHub：${APP_CONFIG.githubPages||location.href}`
-    );
-    console.warn('Cloud connection error:',err);
-  }
+  }catch{}
+  return base;
+}
+const state = loadWorking();
+if(!catalog.communities.some(c => c.id === state.communityId)) state.communityId = catalog.communities[0].id;
+if(!currentCommunity()?.floors.some(f => f.id === state.floor)) state.floor = currentCommunity()?.floors[0]?.id || 'B1';
+function saveWorking(){
+  localStorage.setItem(WORKING_KEY, JSON.stringify({ communityId:state.communityId, floor:state.floor, showPlan:state.showPlan, listFilter:state.listFilter, cameras:state.cameras, modules:state.modules, calibrations:state.calibrations, selected:state.selected }));
 }
 
-async function openCloudProject(projectId){
-  const meta=cloudProjects.find(p=>String(p.projectId)===String(projectId));
-  const projectName=meta?.projectName||'雲端專案';
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0b1118); scene.fog = new THREE.Fog(0x0b1118, 120, 230);
+const camera = new THREE.PerspectiveCamera(45,1,.1,500); camera.position.set(0,72,86);
+const renderer = new THREE.WebGLRenderer({antialias:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.outputColorSpace = THREE.SRGBColorSpace; els.viewer.prepend(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping=true; controls.dampingFactor=.07; controls.maxPolarAngle=Math.PI/2.03; controls.minDistance=25; controls.maxDistance=220;
+scene.add(new THREE.HemisphereLight(0xccecff,0x1a2734,1.85)); const dl = new THREE.DirectionalLight(0xffffff,1.4); dl.position.set(20,60,30); scene.add(dl);
+const floorRoot = new THREE.Group(), moduleRoot = new THREE.Group(), cameraRoot = new THREE.Group(), draftRoot = new THREE.Group(); scene.add(floorRoot,moduleRoot,cameraRoot,draftRoot);
+const textureLoader = new THREE.TextureLoader(); let floorPlane = null;
+const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(); const dragPlane = new THREE.Plane(new THREE.Vector3(0,1,0),0);
+let dragState = null; let draftWall = {points:[],mousePoint:null}; let calibrationDraft = {points:[]};
 
-  openCloudLoadModal(projectName);
-  setCloudStatus(false,'讀取中',true);
+function clearGroup(group){ while(group.children.length){ const o=group.children[0]; group.remove(o); o.traverse?.(n=>{n.geometry?.dispose?.(); if(n.material)(Array.isArray(n.material)?n.material:[n.material]).forEach(m=>m.dispose?.());}); } }
+function esc(s=''){ return String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+function uid(prefix='id'){ return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
+function deepCopy(o){ return JSON.parse(JSON.stringify(o)); }
+function colorToHex(n){ return `#${n.toString(16).padStart(6,'0')}`; }
+function lightHex(hex,amt=.2){ const c=new THREE.Color(hex); c.lerp(new THREE.Color(0xffffff),amt); return c.getHex(); }
+function selCamera(){ return state.selected.kind==='camera' ? currentCameras().find(x=>x.id===state.selected.id)||null : null; }
+function selModule(){ return state.selected.kind==='module' ? currentModules().find(x=>x.id===state.selected.id)||null : null; }
+function setSelected(kind,id){ state.selected={kind,id}; saveWorking(); refreshUI(); renderObjects(); }
+function clearSelection(){ state.selected={kind:state.listFilter==='camera'?'camera':'module',id:null}; saveWorking(); refreshUI(); renderObjects(); }
 
-  try{
-    setCloudLoadProgress(
-      4,
-      '正在確認雲端連線',
-      '確認 Apps Script API 與 Google Drive 專案索引。',
-      1,
-      0,
-      0
-    );
-
-    const ping=await jsonpGet('ping',{},30000);
-    throwIfCloudLoadCancelled();
-    if(!ping?.ok)throw new Error(ping?.message||'Apps Script ping 失敗');
-
-    setCloudLoadProgress(
-      7,
-      '雲端連線正常',
-      `Apps Script API ${ping.apiVersion||'未知'} 已回應，開始讀取「${projectName}」。`,
-      1,
-      0,
-      0
-    );
-
-    const result=await getCloudProjectChunked(projectId);
-    const p=result.project;
-
-    if(!p?.name)throw new Error('雲端專案格式不正確');
-
-    throwIfCloudLoadCancelled();
-
-    setCloudLoadProgress(
-      93,
-      '正在建立本機快取',
-      '將雲端專案保存到瀏覽器，之後再次開啟會更方便。',
-      5,
-      result.loadedBytes,
-      result.totalBytes
-    );
-
-    await dbPut(p);
-
-    throwIfCloudLoadCancelled();
-
-    setCloudLoadProgress(
-      97,
-      '正在建立 3D 場景',
-      '正在載入樓層、平面圖、鏡頭與標記資料。',
-      6,
-      result.loadedBytes,
-      result.totalBytes
-    );
-
-    setCloudStatus(true,'雲端已連線');
-    await openProject(p.id);
-
-    setCloudLoadProgress(
-      100,
-      '專案開啟完成',
-      `「${p.name}」已完成載入，共讀取 ${formatBytes(result.loadedBytes)}。`,
-      6,
-      result.loadedBytes,
-      result.totalBytes
-    );
-
-    $('cloudLoadModal').querySelector('.cloud-load-card')?.classList.add('is-done');
-    toast('已從 Google Drive 開啟專案');
-    closeCloudLoadModal(700);
-  }catch(err){
-    if(String(err.message||'').includes('使用者已取消')){
-      setCloudStatus(true,'雲端已連線');
-      closeCloudLoadModal();
-      toast('已取消讀取');
-      return;
-    }
-
-    $('cloudLoadModal').querySelector('.cloud-load-card')?.classList.add('is-error');
-    setCloudLoadProgress(
-      Number($('cloudLoadPercent')?.textContent?.replace('%','')||0),
-      '雲端專案讀取失敗',
-      err.message||String(err),
-      6,
-      0,
-      0
-    );
-    setCloudStatus(false,'讀取失敗');
-
-    // 錯誤狀態保留，讓使用者看得到停在哪一步。
-    if($('cancelCloudLoadBtn'))$('cancelCloudLoadBtn').textContent='關閉';
-    console.warn('openCloudProject error:',err);
-  }
+function getTextureSource(meta){ return meta?.texture || ''; }
+function buildFloor(){
+  clearGroup(floorRoot); const meta=currentFloorMeta(); if(!meta) return;
+  const {width,depth}=floorWorldSize();
+  const tex=textureLoader.load(getTextureSource(meta),()=>renderer.render(scene,camera)); tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  floorPlane=new THREE.Mesh(new THREE.PlaneGeometry(width,depth),new THREE.MeshStandardMaterial({map:tex,roughness:.92,metalness:0,transparent:true,opacity:state.showPlan?1:.12})); floorPlane.rotation.x=-Math.PI/2; floorPlane.userData.kind='floor'; floorRoot.add(floorPlane);
 }
-
-async function saveProjectCloud(project){
-  const revision=`${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-  project.cloudRevision=revision;
-  setCloudStatus(false,'雲端儲存中',true);$('saveInfo').textContent='正在同步 Google Drive…';
-  await formPost({action:'saveProject',projectId:project.id,projectName:project.name,siteType:project.siteType||'',address:project.address||'',version:APP_VERSION,revision,data:project});
-  const list=await pollCloud(items=>items.some(p=>String(p.projectId)===String(project.id)&&String(p.revision||'')===revision&&p.driveFileId));
-  cloudProjects=list;setCloudStatus(true,'雲端已儲存');$('saveInfo').textContent='本機＋Google Drive 已儲存';renderCloudProjectCards();
+function isWallModule(m){ return m?.type === 'wall' || m?.type === 'wallpath'; }
+function isVehicleModule(m){ return m?.type === 'car' || m?.type === 'motorcycle'; }
+function moduleTypeLabel(m){
+  if(!m) return '—';
+  if(m.type === 'wallpath') return m.closed ? '連續封閉牆體' : '連續牆體';
+  if(m.type === 'wall') return '牆體';
+  if(m.type === 'column') return '柱子';
+  if(m.type === 'car') return '汽車';
+  if(m.type === 'motorcycle') return '機車';
+  return m.type || '模組';
 }
-
-const viewer=$('viewer');
-const scene3d=new THREE.Scene();scene3d.background=new THREE.Color(0x08111a);
-const camera3d=new THREE.PerspectiveCamera(45,1,.1,500);camera3d.position.set(0,60,72);
-const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;viewer.prepend(renderer.domElement);
-const controls=new OrbitControls(camera3d,renderer.domElement);controls.enableDamping=true;controls.maxPolarAngle=Math.PI/2.02;controls.minDistance=10;controls.maxDistance=240;
-scene3d.add(new THREE.HemisphereLight(0xd5f1ff,0x17212b,1.8));const dl=new THREE.DirectionalLight(0xffffff,1.2);dl.position.set(30,70,40);scene3d.add(dl);
-const floorRoot=new THREE.Group(),environmentRoot=new THREE.Group(),cameraRoot=new THREE.Group(),markRoot=new THREE.Group(),draftRoot=new THREE.Group();scene3d.add(floorRoot,environmentRoot,cameraRoot,markRoot,draftRoot);
-const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2(),dragPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
-
-function clearGroup(g){while(g.children.length){const o=g.children[0];g.remove(o);o.traverse?.(n=>{n.geometry?.dispose?.();if(n.material){(Array.isArray(n.material)?n.material:[n.material]).forEach(m=>{m.map?.dispose?.();m.dispose?.()})}})}}
-function resize(){const w=Math.max(1,viewer.clientWidth),h=Math.max(1,viewer.clientHeight);camera3d.aspect=w/h;camera3d.updateProjectionMatrix();renderer.setSize(w,h,false)}
-window.addEventListener('resize',resize);(function loop(){
-  requestAnimationFrame(loop);
-  controls.update();
-
-  const t=performance.now()/1000;
-  newCameraStars.forEach(star=>{
-    // 星星永遠朝向目前鏡頭，並以「無敵星星」方式閃爍 / 呼吸。
-    star.quaternion.copy(camera3d.quaternion);
-    const pulse=1+Math.sin(t*5.2)*.16;
-    star.scale.setScalar(pulse);
-    star.visible=Math.sin(t*9)>-.65;
-    const s=star.children?.[0];
-    if(s?.material)s.material.opacity=.78+(Math.sin(t*6.5)+1)*.11;
-  });
-
-  renderer.render(scene3d,camera3d);
-})();
-function resetView(){camera3d.position.set(0,60,72);controls.target.set(0,0,0);controls.update();$('modeBadge').textContent='3D'}
-function topView(){camera3d.position.set(0,120,.01);controls.target.set(0,0,0);controls.update();$('modeBadge').textContent='俯視'}
-function zoom(f){const d=camera3d.position.clone().sub(controls.target).multiplyScalar(f);camera3d.position.copy(controls.target.clone().add(d));controls.update()}
-function worldSize(){const p=currentScene?.plan,r=p?.height&&p?.width?p.height/p.width:.72;return{w:100,h:100*r}}
-function buildFloor(){clearGroup(floorRoot);floorPlane=null;if(!currentScene?.plan?.dataUrl)return;const {w,h}=worldSize();const t=new THREE.TextureLoader().load(currentScene.plan.dataUrl);t.colorSpace=THREE.SRGBColorSpace;t.center.set(.5,.5);t.rotation=THREE.MathUtils.degToRad(Number(currentScene.plan.rotation||0));const m=new THREE.MeshBasicMaterial({map:t,transparent:true,opacity:Number(currentScene.plan.opacity??1),side:THREE.DoubleSide});floorPlane=new THREE.Mesh(new THREE.PlaneGeometry(w,h),m);floorPlane.rotation.x=-Math.PI/2;floorRoot.add(floorPlane);const grid=new THREE.GridHelper(Math.max(w,h),20,0x294255,0x172938);grid.position.y=.02;floorRoot.add(grid)}
-
-
-function pathOffsetPairs(points,half,closed){
-  const left=[],right=[],n=points.length;
-  const norm=(a,b)=>{
-    const dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz)||1;
-    return {x:-dz/len,z:dx/len};
-  };
-  for(let i=0;i<n;i++){
-    let offset;
-    if(!closed&&i===0){
-      const q=norm(points[0],points[1]);offset={x:q.x*half,z:q.z*half};
-    }else if(!closed&&i===n-1){
-      const q=norm(points[n-2],points[n-1]);offset={x:q.x*half,z:q.z*half};
-    }else{
-      const prev=norm(points[(i-1+n)%n],points[i]);
-      const next=norm(points[i],points[(i+1)%n]);
-      let mx=prev.x+next.x,mz=prev.z+next.z,ml=Math.hypot(mx,mz);
-      if(ml<1e-5){
-        offset={x:next.x*half,z:next.z*half};
-      }else{
-        mx/=ml;mz/=ml;
-        let denom=mx*next.x+mz*next.z;
-        if(Math.abs(denom)<.2)denom=denom<0?-.2:.2;
-        let scale=half/denom;
-        const limit=half*4;
-        scale=Math.max(-limit,Math.min(limit,scale));
-        offset={x:mx*scale,z:mz*scale};
-      }
-    }
-    left.push({x:points[i].x+offset.x,z:points[i].z+offset.z});
-    right.push({x:points[i].x-offset.x,z:points[i].z-offset.z});
-  }
-  return {left,right};
+function segmentRect(a,b,thicknessWorld){
+  const dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz)||1,nx=-dz/len*(thicknessWorld/2),nz=dx/len*(thicknessWorld/2);
+  return [{x:a.x+nx,z:a.z+nz},{x:b.x+nx,z:b.z+nz},{x:b.x-nx,z:b.z-nz},{x:a.x-nx,z:a.z-nz}];
 }
-
-function buildContinuousWallGeometry(o){
-  const points=o.points||[],closed=!!o.closed,half=Number(o.thickness||.18)/2,height=Number(o.height||2.8);
-  if(points.length<2)return new THREE.BoxGeometry(.1,.1,.1);
-
-  const {left,right}=pathOffsetPairs(points,half,closed),verts=[],indices=[];
-  for(let i=0;i<points.length;i++){
-    verts.push(
-      left[i].x,0,left[i].z,
-      left[i].x,height,left[i].z,
-      right[i].x,0,right[i].z,
-      right[i].x,height,right[i].z
-    );
-  }
-
-  const quad=(a,b,c,d)=>indices.push(a,b,c,a,c,d);
-  const segCount=closed?points.length:points.length-1;
-  for(let i=0;i<segCount;i++){
-    const j=(i+1)%points.length,ib=i*4,jb=j*4;
-    quad(ib+1,jb+1,jb+3,ib+3);
-    quad(ib,ib+1,jb+1,jb);
-    quad(ib+2,jb+2,jb+3,ib+3);
-    quad(ib,jb,jb+2,ib+2);
-  }
-  if(!closed){
-    quad(0,2,3,1);
-    const b=(points.length-1)*4;
-    quad(b,b+1,b+3,b+2);
-  }
-
-  const geo=new THREE.BufferGeometry();
-  geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  return geo;
+function getModuleCorners(m){
+  const hl=metersToWorld(m.length)/2, hd=metersToWorld(isWallModule(m)?m.thickness:m.width)/2, ang=-THREE.MathUtils.degToRad(m.angle||0),axis=new THREE.Vector3(0,1,0);
+  return [new THREE.Vector3(-hl,0,-hd),new THREE.Vector3(hl,0,-hd),new THREE.Vector3(hl,0,hd),new THREE.Vector3(-hl,0,hd)].map(v=>{v.applyAxisAngle(axis,ang); return {x:m.x+v.x,z:m.z+v.z};});
 }
-
-function wallPathLength(o){
-  const pts=o.points||[];
-  if(pts.length<2)return 0;
-  let total=0;
-  const count=o.closed?pts.length:pts.length-1;
-  for(let i=0;i<count;i++){
-    const a=pts[i],b=pts[(i+1)%pts.length];
-    total+=Math.hypot(b.x-a.x,b.z-a.z);
-  }
-  return total;
-}
-
-function renderWallDraft(){
-  clearGroup(draftRoot);
-  if(!draftWall.points.length)return;
-
-  const pts=[...draftWall.points];
-  if(draftWall.mousePoint)pts.push(draftWall.mousePoint);
-
-  if(pts.length>=2){
-    const linePts=pts.map(p=>new THREE.Vector3(p.x,.12,p.z));
-    const line=new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(linePts),
-      new THREE.LineBasicMaterial({color:0xf59e0b,transparent:true,opacity:.95})
-    );
-    draftRoot.add(line);
-  }
-
-  draftWall.points.forEach((p,i)=>{
-    const dot=new THREE.Mesh(
-      new THREE.SphereGeometry(i===0?.28:.20,14,12),
-      new THREE.MeshStandardMaterial({color:i===0?0x22d3ee:0xf59e0b,emissive:i===0?0x073642:0x3b2500})
-    );
-    dot.position.set(p.x,.14,p.z);
-    draftRoot.add(dot);
-  });
-}
-
-function screenDistanceToWorldPoint(evt,p){
-  const rect=renderer.domElement.getBoundingClientRect();
-  const v=new THREE.Vector3(p.x,0,p.z).project(camera3d);
-  const sx=rect.left+(v.x+1)*rect.width/2;
-  const sy=rect.top+(1-v.y)*rect.height/2;
-  return Math.hypot(evt.clientX-sx,evt.clientY-sy);
-}
-
-function finishWall(closed=false){
-  if(draftWall.points.length<2){
-    toast('牆體至少需要兩個點位');
-    return;
-  }
-  if(closed&&draftWall.points.length<3){
-    toast('封閉牆體至少需要三個點位');
-    return;
-  }
-
-  const points=draftWall.points.map(p=>({x:+p.x.toFixed(3),z:+p.z.toFixed(3)}));
-  const n=(currentScene.obstacles||[]).filter(o=>o.type==='wallpath'||o.type==='wall').length+1;
-  const o={
-    id:uid('wallpath'),
-    type:'wallpath',
-    name:`牆體-${String(n).padStart(2,'0')}`,
-    points,
-    closed,
-    height:2.8,
-    thickness:.18,
-    fixed:true,
-    hidden:false,
-    occludes:true,
-    angle:0,
-    length:0,
-    width:.18,
-    depth:.18
-  };
-  o.length=+wallPathLength(o).toFixed(2);
-  currentScene.obstacles.push(o);
-  selected={kind:'obstacle',id:o.id};
-
-  draftWall={points:[],mousePoint:null};
-  setMode('select');
-  renderWallDraft();
-  renderObjects();
-  showProperties();
-  saveProject(false);
-}
-
-function obstacleColor(type){return type==='wall'?0x8b98a5:type==='column'?0x9aa6b2:type==='car'?0xe5e7eb:type==='motorcycle'?0x2563eb:0x94a3b8}
-function makeObstacle(o){
-  const g=new THREE.Group();
-  g.userData={kind:'obstacle',id:o.id};
-
-  if(o.type==='wallpath'){
-    const geo=buildContinuousWallGeometry(o);
-    const selectedWall=selected.kind==='obstacle'&&selected.id===o.id;
-    const mat=new THREE.MeshStandardMaterial({
-      color:selectedWall?0x93c5fd:0x6487a7,
-      transparent:true,
-      opacity:o.hidden?.18:.9,
-      roughness:.65,
-      emissive:selectedWall?0x0b2e55:0
-    });
-    const mesh=new THREE.Mesh(geo,mat);
-    mesh.userData={kind:'obstacle',id:o.id};
-    g.add(mesh);
-
-    const edge=new THREE.LineSegments(
-      new THREE.EdgesGeometry(geo,25),
-      new THREE.LineBasicMaterial({color:selectedWall?0xffffff:0xdbeafe,transparent:true,opacity:.48})
-    );
-    edge.userData={kind:'obstacle',id:o.id};
-    g.add(edge);
-    return g;
-  }
-
-  g.position.set(o.x||0,0,o.z||0);
-  g.rotation.y=THREE.MathUtils.degToRad(-(o.angle||0));
-  const mat=new THREE.MeshStandardMaterial({
-    color:obstacleColor(o.type),
-    transparent:true,
-    opacity:o.hidden?.18:.82,
-    roughness:.72
-  });
-  let mesh;
-
-  if(o.type==='wall'){
-    mesh=new THREE.Mesh(
-      new THREE.BoxGeometry(Number(o.length||8),Number(o.height||2.8),Number(o.thickness||.18)),
-      mat
-    );
-    mesh.position.y=Number(o.height||2.8)/2;
-  }else if(o.type==='column'){
-    mesh=new THREE.Mesh(
-      new THREE.BoxGeometry(Number(o.width||.8),Number(o.height||2.8),Number(o.depth||.8)),
-      mat
-    );
-    mesh.position.y=Number(o.height||2.8)/2;
-  }else if(o.type==='car'){
-    mesh=new THREE.Mesh(new THREE.BoxGeometry(1.8,.85,4.2),mat);
-    mesh.position.y=.65;
-    const cabin=new THREE.Mesh(
-      new THREE.BoxGeometry(1.55,.62,2),
-      new THREE.MeshStandardMaterial({color:0xcbd5e1,transparent:true,opacity:.78})
-    );
-    cabin.position.set(0,1.15,-.1);
-    cabin.userData={kind:'obstacle',id:o.id};
-    g.add(cabin);
-  }else if(o.type==='motorcycle'){
-    mesh=new THREE.Mesh(new THREE.BoxGeometry(.55,.65,1.8),mat);
-    mesh.position.y=.45;
-  }else{
-    const w=Number(o.width||2.5),d=Number(o.depth||5);
-    const pts=[
-      new THREE.Vector3(-w/2,.03,-d/2),
-      new THREE.Vector3(w/2,.03,-d/2),
-      new THREE.Vector3(w/2,.03,d/2),
-      new THREE.Vector3(-w/2,.03,d/2),
-      new THREE.Vector3(-w/2,.03,-d/2)
-    ];
-    const line=new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({color:0xf8fafc,transparent:true,opacity:.8})
-    );
-    line.userData={kind:'obstacle',id:o.id};
-    g.add(line);
-    return g;
-  }
-
-  mesh.userData={kind:'obstacle',id:o.id};
-  g.add(mesh);
-  return g;
-}
-function raySeg(origin,dir,a,b){const rx=dir.x,rz=dir.z,sx=b.x-a.x,sz=b.z-a.z,qx=a.x-origin.x,qz=a.z-origin.z,den=rx*sz-rz*sx;if(Math.abs(den)<1e-7)return null;const t=(qx*sz-qz*sx)/den,u=(qx*rz-qz*rx)/den;return t>=0&&u>=0&&u<=1?t:null}
 function obstacleSegments(){
-  const out=[];
-  (currentScene?.obstacles||[]).forEach(o=>{
-    if(o.hidden||o.occludes===false||o.type==='parking')return;
-
-    if(o.type==='wallpath'){
-      const pts=o.points||[];
-      const count=o.closed?pts.length:pts.length-1;
+  const segs=[];
+  currentModules().forEach(m=>{
+    if(isVehicleModule(m) && m.occludes === false) return;
+    if(m.type==='wallpath' && Array.isArray(m.points) && m.points.length>=2){
+      const count=m.closed?m.points.length:m.points.length-1;
       for(let i=0;i<count;i++){
-        const a=pts[i],b=pts[(i+1)%pts.length];
-        if(a&&b)out.push([{x:a.x,z:a.z},{x:b.x,z:b.z}]);
+        const a=m.points[i],b=m.points[(i+1)%m.points.length],rect=segmentRect(a,b,metersToWorld(m.thickness||.2));
+        for(let j=0;j<4;j++) segs.push([rect[j],rect[(j+1)%4]]);
       }
-      return;
+    }else{
+      const p=getModuleCorners(m); for(let i=0;i<4;i++)segs.push([p[i],p[(i+1)%4]]);
     }
-
-    const rad=THREE.MathUtils.degToRad(Number(o.angle||0));
-    const c=Math.cos(rad),s=Math.sin(rad);
-    const tr=(x,z)=>({x:(o.x||0)+x*c-z*s,z:(o.z||0)+x*s+z*c});
-    let hw=.4,hd=.4;
-
-    if(o.type==='wall'){hw=Number(o.length||8)/2;hd=Number(o.thickness||.18)/2}
-    else if(o.type==='column'){hw=Number(o.width||.8)/2;hd=Number(o.depth||.8)/2}
-    else if(o.type==='car'){hw=.9;hd=2.1}
-    else if(o.type==='motorcycle'){hw=.35;hd=.95}
-
-    const p=[tr(-hw,-hd),tr(hw,-hd),tr(hw,hd),tr(-hw,hd)];
-    for(let i=0;i<4;i++)out.push([p[i],p[(i+1)%4]]);
   });
+  const {width,depth}=floorWorldSize(),hw=width/2,hd=depth/2,b=[{x:-hw,z:-hd},{x:hw,z:-hd},{x:hw,z:hd},{x:-hw,z:hd}]; for(let i=0;i<4;i++)segs.push([b[i],b[(i+1)%4]]); return segs;
+}
+function raySeg(origin,dir,a,b){ const sx=b.x-a.x,sz=b.z-a.z,det=dir.x*sz-dir.z*sx; if(Math.abs(det)<1e-8)return null; const ox=a.x-origin.x,oz=a.z-origin.z,t=(ox*sz-oz*sx)/det,u=(ox*dir.z-oz*dir.x)/det; return t>=0&&u>=0&&u<=1?t:null; }
+function occludedDistances(cam){
+  const theta=THREE.MathUtils.degToRad(cam.fov),yaw=THREE.MathUtils.degToRad(cam.yaw),segments=obstacleSegments(),samples=Math.max(96,Math.round(cam.fov*2)),origin={x:cam.x,z:cam.z},range=metersToWorld(cam.range),out=[];
+  for(let i=0;i<=samples;i++){ const a=-theta/2+theta*(i/samples); const v=new THREE.Vector3(Math.cos(a),0,-Math.sin(a)).applyAxisAngle(new THREE.Vector3(0,1,0),-yaw); let nearest=range; for(const [p1,p2] of segments){const d=raySeg(origin,{x:v.x,z:v.z},p1,p2); if(d!==null&&d>.08&&d<nearest)nearest=d;} out.push({a,d:nearest}); }
   return out;
 }
-function getCameraPose(c){
-  const yawDeg=Number(c.yaw||0);
-  const yawRad=THREE.MathUtils.degToRad(yawDeg);
-  // 模型本體 local -Z 為鏡頭朝向，因此旋轉採 -yaw。
-  const modelRotationY=-yawRad;
-  const mountY=2.7;
-  const muzzleOffsetZ=-0.965;
-  return {yawDeg,yawRad,modelRotationY,mountY,muzzleOffsetZ};
+function addSpecialMarker(group,cameraData){
+  if(cameraData.colorKey!=='yellow') return;
+  const height = metersToWorld(7);
+  const starColor = CAMERA_COLOR_PRESETS.yellow.body;
+  const line = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03,0.03,Math.max(height-1.2,0.6),8),
+    new THREE.MeshStandardMaterial({color:0xf8fafc, roughness:.4, metalness:.18})
+  );
+  line.position.set(0, Math.max((height-1.2)/2,0.3), 0); line.userData = group.userData; group.add(line);
+
+  const starShape = new THREE.Shape();
+  const outer = 0.85, inner = 0.38;
+  for(let i=0;i<10;i++){
+    const r = i % 2 === 0 ? outer : inner;
+    const a = -Math.PI/2 + i * Math.PI/5;
+    const x = Math.cos(a)*r, y = Math.sin(a)*r;
+    if(i===0) starShape.moveTo(x,y); else starShape.lineTo(x,y);
+  }
+  starShape.closePath();
+  const starGeo = new THREE.ExtrudeGeometry(starShape,{depth:0.28, bevelEnabled:true, bevelSegments:1, bevelSize:0.06, bevelThickness:0.04});
+  starGeo.center();
+  const star = new THREE.Mesh(starGeo, new THREE.MeshStandardMaterial({color:0xfacc15, emissive:0x7c5b02, emissiveIntensity:0.95, roughness:.28, metalness:.14}));
+  star.position.set(0, height, 0); star.rotation.y = THREE.MathUtils.degToRad(18); star.userData = { ...group.userData, blinkType:'invincible-star', baseY:height, baseScale:1 };
+  group.add(star);
+
+  const eyeGeo = new THREE.BoxGeometry(0.10,0.18,0.05);
+  const eyeMat = new THREE.MeshStandardMaterial({color:0x111827, roughness:.5, metalness:0});
+  const eye1 = new THREE.Mesh(eyeGeo, eyeMat); eye1.position.set(-0.18, height+0.05, 0.18); eye1.userData = group.userData; group.add(eye1);
+  const eye2 = new THREE.Mesh(eyeGeo, eyeMat); eye2.position.set(0.18, height+0.05, 0.18); eye2.userData = group.userData; group.add(eye2);
 }
 
-function cameraCoverage(c){
-  const pre=LENS[String(c.lens)]||LENS['2.8'];
-  const range=Number(c.range||pre.range);
-  const fov=THREE.MathUtils.degToRad(pre.fov);
-  const pose=getCameraPose(c);
+function createMaterial(opts={}){
+  return new THREE.MeshStandardMaterial({ roughness:.42, metalness:.22, ...opts });
+}
+function addWheel(group, radius, width, x, y, z){
+  const tire = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, width, 18), createMaterial({ color:0x111827, roughness:.86, metalness:.08 }));
+  tire.rotation.z = Math.PI / 2; tire.position.set(x, y, z); tire.userData = group.userData; group.add(tire);
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(radius*.55, radius*.55, width*1.03, 12), createMaterial({ color:0xcbd5e1, roughness:.35, metalness:.58 }));
+  rim.rotation.z = Math.PI / 2; rim.position.set(x, y, z); rim.userData = group.userData; group.add(rim);
+}
+function addVehicleShadow(group, len, wid){
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(len*.92, wid*.82), new THREE.MeshBasicMaterial({ color:0x020617, transparent:true, opacity:.18, depthWrite:false }));
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = .02; shadow.userData = group.userData; group.add(shadow);
+}
+function buildSportsCarGroup(group, m, sel){
+  const L = metersToWorld(m.length || 4.6), W = metersToWorld(m.width || 1.9), H = metersToWorld(m.height || 1.35);
+  const bodyColor = sel ? 0xfde68a : 0xf8fafc;
+  addVehicleShadow(group, L, W);
 
-  // V2.13：每支鏡頭只保留一個完整扇形視野，不再額外疊加第二組線框。
+  const lower = new THREE.Mesh(new THREE.BoxGeometry(L*.94, H*.24, W*.92), createMaterial({ color:bodyColor, emissive: sel ? 0x3b2f06 : 0x220404 }));
+  lower.position.y = H*.18; lower.userData = group.userData; group.add(lower);
+
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(L*.20, H*.16, W*.82), createMaterial({ color:bodyColor }));
+  nose.position.set(L*.37, H*.20, 0); nose.rotation.z = -THREE.MathUtils.degToRad(9); nose.userData = group.userData; group.add(nose);
+
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(L*.23, H*.08, W*.74), createMaterial({ color:lightHex(bodyColor,.08) }));
+  hood.position.set(L*.17, H*.28, 0); hood.rotation.z = -THREE.MathUtils.degToRad(5); hood.userData = group.userData; group.add(hood);
+
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(L*.34, H*.22, W*.68), createMaterial({ color:0x0f172a, transparent:true, opacity:.88, roughness:.22, metalness:.38 }));
+  cabin.position.set(-L*.02, H*.39, 0); cabin.rotation.z = -THREE.MathUtils.degToRad(7); cabin.userData = group.userData; group.add(cabin);
+
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(L*.18, H*.08, W*.52), createMaterial({ color:0x111827, roughness:.25, metalness:.32 }));
+  roof.position.set(-L*.04, H*.51, 0); roof.userData = group.userData; group.add(roof);
+
+  const rear = new THREE.Mesh(new THREE.BoxGeometry(L*.26, H*.18, W*.80), createMaterial({ color:bodyColor }));
+  rear.position.set(-L*.30, H*.28, 0); rear.rotation.z = THREE.MathUtils.degToRad(4); rear.userData = group.userData; group.add(rear);
+
+  const diffuser = new THREE.Mesh(new THREE.BoxGeometry(L*.12, H*.05, W*.76), createMaterial({ color:0x0f172a, roughness:.65, metalness:.12 }));
+  diffuser.position.set(-L*.44, H*.10, 0); diffuser.userData = group.userData; group.add(diffuser);
+
+  const spoilerPost1 = new THREE.Mesh(new THREE.BoxGeometry(L*.02, H*.08, W*.03), createMaterial({ color:0x111827 }));
+  spoilerPost1.position.set(-L*.37, H*.40, W*.20); spoilerPost1.userData = group.userData; group.add(spoilerPost1);
+  const spoilerPost2 = spoilerPost1.clone(); spoilerPost2.position.z = -W*.20; spoilerPost2.userData = group.userData; group.add(spoilerPost2);
+  const spoiler = new THREE.Mesh(new THREE.BoxGeometry(L*.13, H*.03, W*.50), createMaterial({ color:0x0f172a }));
+  spoiler.position.set(-L*.37, H*.45, 0); spoiler.userData = group.userData; group.add(spoiler);
+
+  const splitter = new THREE.Mesh(new THREE.BoxGeometry(L*.08, H*.03, W*.78), createMaterial({ color:0x111827 }));
+  splitter.position.set(L*.46, H*.08, 0); splitter.userData = group.userData; group.add(splitter);
+
+  const lightGeo = new THREE.BoxGeometry(L*.03, H*.04, W*.12);
+  const head1 = new THREE.Mesh(lightGeo, createMaterial({ color:0xfef3c7, emissive:0x8a6f1a, roughness:.25 }));
+  head1.position.set(L*.47, H*.18, W*.25); head1.userData = group.userData; group.add(head1);
+  const head2 = head1.clone(); head2.position.z = -W*.25; head2.userData = group.userData; group.add(head2);
+  const tail1 = new THREE.Mesh(lightGeo, createMaterial({ color:0xf87171, emissive:0x7f1d1d, roughness:.25 }));
+  tail1.position.set(-L*.48, H*.16, W*.23); tail1.userData = group.userData; group.add(tail1);
+  const tail2 = tail1.clone(); tail2.position.z = -W*.23; tail2.userData = group.userData; group.add(tail2);
+
+  const wheelR = metersToWorld(.34), wheelW = metersToWorld(.24);
+  [[ L*.24, wheelR,  W*.36],[ L*.24, wheelR, -W*.36],[-L*.23, wheelR,  W*.36],[-L*.23, wheelR, -W*.36]].forEach(pos => addWheel(group, wheelR, wheelW, ...pos));
+}
+function buildSportMotorcycleGroup(group, m, sel){
+  const L = metersToWorld(m.length || 2.0), W = metersToWorld(m.width || .8), H = metersToWorld(m.height || 1.1);
+  const bodyColor = sel ? 0xfde68a : 0x2563eb;
+  addVehicleShadow(group, L, W);
+
+  const wheelR = metersToWorld(.28), wheelW = metersToWorld(.12);
+  addWheel(group, wheelR, wheelW, L*.34, wheelR, 0);
+  addWheel(group, wheelR, wheelW, -L*.30, wheelR, 0);
+
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(L*.44, H*.08, W*.20), createMaterial({ color:0x111827, roughness:.55, metalness:.24 }));
+  frame.position.set(0, H*.38, 0); frame.rotation.z = -THREE.MathUtils.degToRad(16); frame.userData = group.userData; group.add(frame);
+
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(L*.22, H*.16, W*.34), createMaterial({ color:bodyColor, emissive: sel ? 0x3b2f06 : 0x071b44 }));
+  tank.position.set(L*.02, H*.47, 0); tank.rotation.z = -THREE.MathUtils.degToRad(12); tank.userData = group.userData; group.add(tank);
+
+  const fairing = new THREE.Mesh(new THREE.BoxGeometry(L*.18, H*.20, W*.30), createMaterial({ color:bodyColor }));
+  fairing.position.set(L*.22, H*.48, 0); fairing.rotation.z = -THREE.MathUtils.degToRad(24); fairing.userData = group.userData; group.add(fairing);
+
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(L*.16, H*.08, W*.28), createMaterial({ color:0x0f172a }));
+  seat.position.set(-L*.10, H*.53, 0); seat.rotation.z = THREE.MathUtils.degToRad(10); seat.userData = group.userData; group.add(seat);
+
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(L*.13, H*.11, W*.22), createMaterial({ color:bodyColor }));
+  tail.position.set(-L*.22, H*.57, 0); tail.rotation.z = THREE.MathUtils.degToRad(18); tail.userData = group.userData; group.add(tail);
+
+  const windscreen = new THREE.Mesh(new THREE.BoxGeometry(L*.08, H*.15, W*.18), createMaterial({ color:0xbfe3ff, transparent:true, opacity:.70, roughness:.12, metalness:.38 }));
+  windscreen.position.set(L*.29, H*.60, 0); windscreen.rotation.z = -THREE.MathUtils.degToRad(32); windscreen.userData = group.userData; group.add(windscreen);
+
+  const fork1 = new THREE.Mesh(new THREE.BoxGeometry(L*.03, H*.34, W*.03), createMaterial({ color:0xcbd5e1, roughness:.35, metalness:.62 }));
+  fork1.position.set(L*.26, H*.34, W*.05); fork1.rotation.z = -THREE.MathUtils.degToRad(24); fork1.userData = group.userData; group.add(fork1);
+  const fork2 = fork1.clone(); fork2.position.z = -W*.05; fork2.userData = group.userData; group.add(fork2);
+
+  const swing = new THREE.Mesh(new THREE.BoxGeometry(L*.22, H*.05, W*.04), createMaterial({ color:0xcbd5e1, roughness:.35, metalness:.55 }));
+  swing.position.set(-L*.17, H*.28, 0); swing.rotation.z = THREE.MathUtils.degToRad(17); swing.userData = group.userData; group.add(swing);
+
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(L*.10, H*.03, W*.44), createMaterial({ color:0x111827, roughness:.55, metalness:.22 }));
+  handle.position.set(L*.24, H*.61, 0); handle.rotation.x = THREE.MathUtils.degToRad(7); handle.rotation.z = -THREE.MathUtils.degToRad(10); handle.userData = group.userData; group.add(handle);
+
+  const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(H*.03, H*.03, L*.18, 12), createMaterial({ color:0x94a3b8, roughness:.3, metalness:.72 }));
+  exhaust.rotation.z = Math.PI / 2; exhaust.position.set(-L*.03, H*.35, -W*.16); exhaust.userData = group.userData; group.add(exhaust);
+}
+
+function makeCameraMesh(c){
+  const selected=state.selected.kind==='camera'&&state.selected.id===c.id;
+  const p=CAMERA_COLOR_PRESETS[c.colorKey]||CAMERA_COLOR_PRESETS.red;
+  const g=new THREE.Group();
+  g.userData={kind:'camera',id:c.id};
+  const bc=selected?lightHex(p.body,.18):p.body;
+
+  const bodyMat=createMaterial({color:bc, roughness:.48, metalness:.24, emissive:selected?0x223344:0x000000});
+  const darkMat=createMaterial({color:0x2a313d, roughness:.55, metalness:.16});
+  const lensMat=createMaterial({color:0x111827, roughness:.18, metalness:.68});
+  const trimMat=createMaterial({color:0xe5e7eb, roughness:.5, metalness:.22});
+  const screwMat=createMaterial({color:0xa8b1bd, roughness:.45, metalness:.55});
+
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.74,.62,1.1), trimMat);
+  hood.position.set(-.05,2.92,0); hood.scale.set(1,1,.95); hood.userData=g.userData; g.add(hood);
+  const hoodCut = new THREE.Mesh(new THREE.BoxGeometry(1.18,.4,.82), createMaterial({color:0x0f172a, roughness:.92, metalness:0}));
+  hoodCut.position.set(-.3,2.86,0); hoodCut.userData=g.userData; g.add(hoodCut);
+
+  const mainBody = new THREE.Mesh(new THREE.BoxGeometry(1.55,.92,.92), bodyMat);
+  mainBody.position.set(-.02,2.58,0); mainBody.userData=g.userData; g.add(mainBody);
+
+  const rearCap = new THREE.Mesh(new THREE.CylinderGeometry(.42,.46,.16,18), darkMat);
+  rearCap.rotation.z=Math.PI/2; rearCap.position.set(-.82,2.56,0); rearCap.userData=g.userData; g.add(rearCap);
+
+  const frontFrame = new THREE.Mesh(new THREE.BoxGeometry(.48,.86,.86), darkMat);
+  frontFrame.position.set(.68,2.58,0); frontFrame.userData=g.userData; g.add(frontFrame);
+
+  const bezel = new THREE.Mesh(new THREE.CylinderGeometry(.34,.34,.12,8), darkMat);
+  bezel.rotation.z=Math.PI/2; bezel.position.set(.88,2.58,0); bezel.userData=g.userData; g.add(bezel);
+
+  const lensBarrel = new THREE.Mesh(new THREE.CylinderGeometry(.24,.28,.34,24), lensMat);
+  lensBarrel.rotation.z=Math.PI/2; lensBarrel.position.set(1.02,2.58,0); lensBarrel.userData=g.userData; g.add(lensBarrel);
+
+  const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(.18,.18,.04,24), new THREE.MeshStandardMaterial({color:0x9fb9ff, roughness:.04, metalness:.75, transparent:true, opacity:.88, emissive:0x1d4ed8, emissiveIntensity:.16}));
+  lensGlass.rotation.z=Math.PI/2; lensGlass.position.set(1.19,2.58,0); lensGlass.userData=g.userData; g.add(lensGlass);
+
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(.46,.68,.26), bodyMat);
+  arm.position.set(-.08,1.98,0); arm.userData=g.userData; g.add(arm);
+  const yoke = new THREE.Mesh(new THREE.CylinderGeometry(.12,.12,.36,16), darkMat);
+  yoke.rotation.x=Math.PI/2; yoke.position.set(-.08,2.18,0); yoke.userData=g.userData; g.add(yoke);
+
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.19,.21,1.62,18), new THREE.MeshStandardMaterial({color:0x6b7280, roughness:.62, metalness:.2}));
+  pole.position.set(-.08,1.0,0); pole.userData=g.userData; g.add(pole);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(.28,.3,.24,18), darkMat);
+  collar.position.set(-.08,.24,0); collar.userData=g.userData; g.add(collar);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(.62,.66,.14,24), new THREE.MeshStandardMaterial({color:0x7b8794, roughness:.66, metalness:.22}));
+  base.position.y=.07; base.userData=g.userData; g.add(base);
+
+  for(const ang of [45,135,225,315]){
+    const r=THREE.MathUtils.degToRad(ang);
+    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,.04,12), screwMat);
+    bolt.position.set(-.08+Math.cos(r)*.42,.15,Math.sin(r)*.42); bolt.userData=g.userData; g.add(bolt);
+  }
+  for(const sy of[-.25,.25]){
+    for(const sz of[-.25,.25]){
+      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,.02,12), screwMat);
+      screw.rotation.z=Math.PI/2; screw.position.set(.88,2.58+sy,sz); screw.userData=g.userData; g.add(screw);
+    }
+  }
+
+  // V1.16：與 V2.13 相同，鏡頭只保留一個完整扇形視野，並從鏡片前端發射。
+  const dist=occludedDistances(c);
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
-  const samples=72;
-  for(let i=0;i<=samples;i++){
-    const off=-fov/2+fov*i/samples;
-    const px=Math.sin(off)*range;
-    const pz=-Math.cos(off)*range;
-    shape.lineTo(px,pz);
-  }
+  dist.forEach(({a,d})=>shape.lineTo(Math.cos(a)*d,-Math.sin(a)*d));
   shape.closePath();
-
-  const group=new THREE.Group();
-  group.position.set(c.x||0,0,c.z||0);
-  group.rotation.y=pose.modelRotationY;
-  group.userData={kind:'camera-coverage',id:c.id};
-
   const coverage=new THREE.Mesh(
-    new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),
+    new THREE.ShapeGeometry(shape),
     new THREE.MeshBasicMaterial({
-      color:COLORS[c.status]||COLORS.existing,
+      color:p.cone,
       transparent:true,
       opacity:.24,
       side:THREE.DoubleSide,
       depthWrite:false
     })
   );
-  coverage.position.set(0,.055,pose.muzzleOffsetZ);
+  coverage.rotation.x=-Math.PI/2;
+  coverage.position.set(1.18,.07,0);
   coverage.renderOrder=6;
-  coverage.userData={kind:'camera-coverage',id:c.id};
-  group.add(coverage);
+  coverage.userData=g.userData;
+  g.add(coverage);
 
-  return group;
-}
-
-function createFivePointStarShape(outer=0.9,inner=0.4){
-  const shape=new THREE.Shape();
-  for(let i=0;i<10;i++){
-    const r=i%2===0?outer:inner;
-    const a=-Math.PI/2+i*Math.PI/5;
-    const x=Math.cos(a)*r,y=Math.sin(a)*r;
-    if(i===0)shape.moveTo(x,y);else shape.lineTo(x,y);
-  }
-  shape.closePath();
-  return shape;
-}
-
-function makeNewCameraStar(c){
-  const g=new THREE.Group();
-  g.position.set(c.x||0,7,c.z||0);
-  g.userData={kind:'new-camera-star',cameraId:c.id,baseScale:1};
-
-  const star=new THREE.Mesh(
-    new THREE.ShapeGeometry(createFivePointStarShape(1.0,.43)),
-    new THREE.MeshBasicMaterial({
-      color:0xffe600,
-      transparent:true,
-      opacity:.95,
-      side:THREE.DoubleSide,
-      depthTest:false
-    })
-  );
-  star.renderOrder=20;
-  star.userData={kind:'new-camera-star',cameraId:c.id};
-  g.add(star);
-
-  const glow=new THREE.Mesh(
-    new THREE.CircleGeometry(1.18,32),
-    new THREE.MeshBasicMaterial({
-      color:0xffcc00,
-      transparent:true,
-      opacity:.14,
-      side:THREE.DoubleSide,
-      depthTest:false
-    })
-  );
-  glow.position.z=-.02;
-  glow.renderOrder=19;
-  g.add(glow);
-
-  const stem=new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0,-4.15,0),
-      new THREE.Vector3(0,-.95,0)
-    ]),
-    new THREE.LineDashedMaterial({
-      color:0xffe600,
-      transparent:true,
-      opacity:.48,
-      dashSize:.28,
-      gapSize:.18,
-      depthTest:false
-    })
-  );
-  stem.computeLineDistances();
-  stem.renderOrder=18;
-  g.add(stem);
-
-  newCameraStars.push(g);
+  addSpecialMarker(g,c);
+  g.position.set(c.x,0,c.z);
+  g.rotation.y=-THREE.MathUtils.degToRad(c.yaw||0);
   return g;
 }
-
-function makeCamera(c){
-  const isSelected=selected.kind==='camera'&&selected.id===c.id;
-  const color=COLORS[c.status]||COLORS.existing;
-  const g=new THREE.Group();
-  g.position.set(c.x||0,0,c.z||0);
-  const pose=getCameraPose(c);
-  // V2.12：鏡頭本體與 FOV 共用同一組方向資料。
-  g.rotation.y=pose.modelRotationY;
-  g.userData={kind:'camera',id:c.id};
-
-  const shellMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:0xe7ebef,metalness:.32,roughness:.46,emissive:isSelected?0x334155:0x000000});
-  const shellDark=new THREE.MeshStandardMaterial({color:0x2b313a,metalness:.42,roughness:.28});
-  const standMat=new THREE.MeshStandardMaterial({color:0x6b7280,metalness:.55,roughness:.34});
-  const accentMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:color,metalness:.22,roughness:.4,emissive:isSelected?0x334155:0});
-  const screwMat=new THREE.MeshStandardMaterial({color:0xdfe4ea,metalness:.86,roughness:.16});
-
-  // 工業型盒式攝影機：上蓋、機身、前框、鏡頭筒、側支架、立柱、底座。
-  const body=new THREE.Mesh(new THREE.BoxGeometry(1.82,.82,1.22),shellMat);
-  body.position.set(0,2.7,.02);body.userData=g.userData;g.add(body);
-
-  const bodyLower=new THREE.Mesh(new THREE.BoxGeometry(1.68,.22,1.02),shellDark);
-  bodyLower.position.set(0,2.31,.03);bodyLower.userData=g.userData;g.add(bodyLower);
-
-  const hoodTop=new THREE.Mesh(new THREE.BoxGeometry(1.98,.16,1.52),shellMat);
-  hoodTop.position.set(0,3.05,-.12);hoodTop.userData=g.userData;g.add(hoodTop);
-
-  const hoodFrontLip=new THREE.Mesh(new THREE.BoxGeometry(1.96,.28,.18),shellMat);
-  hoodFrontLip.position.set(0,2.92,-.78);hoodFrontLip.userData=g.userData;g.add(hoodFrontLip);
-
-  const hoodSideL=new THREE.Mesh(new THREE.BoxGeometry(.12,.22,.68),shellMat);
-  hoodSideL.position.set(-.93,2.87,-.42);hoodSideL.userData=g.userData;g.add(hoodSideL);
-  const hoodSideR=hoodSideL.clone();hoodSideR.position.x=.93;hoodSideR.userData=g.userData;g.add(hoodSideR);
-
-  const frontFrame=new THREE.Mesh(new THREE.BoxGeometry(.98,.98,.22),shellDark);
-  frontFrame.position.set(0,2.7,-.52);frontFrame.userData=g.userData;g.add(frontFrame);
-
-  const lensRing=new THREE.Mesh(new THREE.CylinderGeometry(.33,.36,.22,28),shellDark);
-  lensRing.rotation.x=Math.PI/2;lensRing.position.set(0,2.7,-.68);lensRing.userData=g.userData;g.add(lensRing);
-
-  const lensBarrel=new THREE.Mesh(new THREE.CylinderGeometry(.23,.26,.26,28),new THREE.MeshStandardMaterial({color:0x111827,metalness:.76,roughness:.12}));
-  lensBarrel.rotation.x=Math.PI/2;lensBarrel.position.set(0,2.7,-.83);lensBarrel.userData=g.userData;g.add(lensBarrel);
-
-  const lensGlass=new THREE.Mesh(new THREE.CircleGeometry(.215,28),new THREE.MeshStandardMaterial({color:0x9fd3ff,emissive:0x1d4ed8,emissiveIntensity:.28,metalness:.12,roughness:.05,transparent:true,opacity:.96}));
-  lensGlass.position.set(0,2.7,-.965);lensGlass.rotation.x=-Math.PI/2;lensGlass.userData=g.userData;g.add(lensGlass);
-
-  const sensorShade=new THREE.Mesh(new THREE.BoxGeometry(.42,.18,.1),shellDark);
-  sensorShade.position.set(0,2.26,-.48);sensorShade.userData=g.userData;g.add(sensorShade);
-
-  const rearCap=new THREE.Mesh(new THREE.BoxGeometry(1.24,.58,.18),shellMat);
-  rearCap.position.set(0,2.73,.68);rearCap.userData=g.userData;g.add(rearCap);
-
-  const sideMountL=new THREE.Mesh(new THREE.BoxGeometry(.16,.66,.24),standMat);
-  sideMountL.position.set(-.58,2.25,.18);sideMountL.rotation.z=.18;sideMountL.userData=g.userData;g.add(sideMountL);
-  const sideMountR=sideMountL.clone();sideMountR.position.x=.58;sideMountR.rotation.z=-.18;sideMountR.userData=g.userData;g.add(sideMountR);
-
-  const pivot=new THREE.Mesh(new THREE.CylinderGeometry(.1,.1,1.12,18),accentMat);
-  pivot.rotation.z=Math.PI/2;pivot.position.set(0,2.08,.18);pivot.userData=g.userData;g.add(pivot);
-
-  const neckA=new THREE.Mesh(new THREE.CylinderGeometry(.1,.13,.34,16),standMat);
-  neckA.position.set(0,1.82,.18);neckA.userData=g.userData;g.add(neckA);
-
-  const pole=new THREE.Mesh(new THREE.CylinderGeometry(.14,.14,1.38,18),standMat);
-  pole.position.set(0,1.02,.18);pole.userData=g.userData;g.add(pole);
-
-  const baseCollar=new THREE.Mesh(new THREE.CylinderGeometry(.22,.22,.14,18),accentMat);
-  baseCollar.position.set(0,.27,.18);baseCollar.userData=g.userData;g.add(baseCollar);
-
-  const baseDisc=new THREE.Mesh(new THREE.CylinderGeometry(.58,.62,.16,30),standMat);
-  baseDisc.position.set(0,.08,.18);baseDisc.userData=g.userData;g.add(baseDisc);
-
-  for(const ang of [18,90,162,234,306]){
-    const r=THREE.MathUtils.degToRad(ang);
-    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.042,.042,.05,12),screwMat);
-    bolt.position.set(Math.cos(r)*.38,.15,Math.sin(r)*.38+.18);bolt.userData=g.userData;g.add(bolt);
-  }
-
-  for(const sx of[-.31,.31]){
-    for(const sy of[-.31,.31]){
-      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.034,.034,.03,12),screwMat);
-      screw.rotation.x=Math.PI/2;screw.position.set(sx,2.7+sy,-.41);screw.userData=g.userData;g.add(screw);
+function pathOffsetPairs(points,half,closed){
+  const left=[],right=[],n=points.length;
+  const norm=(a,b)=>{const dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz)||1;return{x:-dz/len,z:dx/len,dx:dx/len,dz:dz/len};};
+  for(let i=0;i<n;i++){
+    let offset;
+    if(!closed && i===0){ const q=norm(points[0],points[1]); offset={x:q.x*half,z:q.z*half}; }
+    else if(!closed && i===n-1){ const q=norm(points[n-2],points[n-1]); offset={x:q.x*half,z:q.z*half}; }
+    else{
+      const prev=norm(points[(i-1+n)%n],points[i]),next=norm(points[i],points[(i+1)%n]);
+      let mx=prev.x+next.x,mz=prev.z+next.z,ml=Math.hypot(mx,mz);
+      if(ml<1e-5){offset={x:next.x*half,z:next.z*half};}
+      else{mx/=ml;mz/=ml;let denom=mx*next.x+mz*next.z;if(Math.abs(denom)<.2)denom=denom<0?-.2:.2;let scale=half/denom;const limit=half*4;scale=Math.max(-limit,Math.min(limit,scale));offset={x:mx*scale,z:mz*scale};}
     }
+    left.push({x:points[i].x+offset.x,z:points[i].z+offset.z}); right.push({x:points[i].x-offset.x,z:points[i].z-offset.z});
+  }
+  return{left,right};
+}
+function buildContinuousWallGeometry(m){
+  const points=m.points||[],closed=!!m.closed,half=metersToWorld(m.thickness||.2)/2,height=metersToWorld(m.height||3);
+  if(points.length<2)return new THREE.BoxGeometry(.1,.1,.1);
+  const {left,right}=pathOffsetPairs(points,half,closed),verts=[],indices=[];
+  for(let i=0;i<points.length;i++){
+    verts.push(left[i].x,0,left[i].z,left[i].x,height,left[i].z,right[i].x,0,right[i].z,right[i].x,height,right[i].z);
+  }
+  const segCount=closed?points.length:points.length-1;
+  const quad=(a,b,c,d)=>indices.push(a,b,c,a,c,d);
+  for(let i=0;i<segCount;i++){
+    const j=(i+1)%points.length,ib=i*4,jb=j*4;
+    quad(ib+1,jb+1,jb+3,ib+3); // top
+    quad(ib,ib+1,jb+1,jb);     // left face
+    quad(ib+2,jb+2,jb+3,ib+3); // right face
+    quad(ib,jb,jb+2,ib+2);     // bottom
+  }
+  if(!closed){quad(0,2,3,1);const b=(points.length-1)*4;quad(b,b+1,b+3,b+2);}
+  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));geo.setIndex(indices);geo.computeVertexNormals();return geo;
+}
+function makeModuleMesh(m){
+  const sel=state.selected.kind==='module'&&state.selected.id===m.id,isWall=isWallModule(m),height=metersToWorld(m.height||3),g=new THREE.Group(); g.userData={kind:'module',id:m.id};
+
+  if(m.type==='car' || m.type==='motorcycle'){
+    if(m.type==='car') buildSportsCarGroup(g, m, sel);
+    else buildSportMotorcycleGroup(g, m, sel);
+    g.position.set(m.x,0,m.z); g.rotation.y=-THREE.MathUtils.degToRad(m.angle||0); return g;
   }
 
+  let geo;
+  if(m.type==='wallpath') geo=buildContinuousWallGeometry(m);
+  else geo=new THREE.BoxGeometry(metersToWorld(m.length),height,metersToWorld(isWall?m.thickness:m.width));
+  const mat=new THREE.MeshStandardMaterial({color:sel?(isWall?0x93c5fd:0xc4b5fd):(isWall?0x6487a7:0x7c73c9),transparent:true,opacity:(m.type==='wallpath' ? .96 : .9),roughness:.65,emissive:sel?(isWall?0x0b2e55:0x281f56):0,side:THREE.DoubleSide});
+  const mesh=new THREE.Mesh(geo,mat); if(m.type!=='wallpath')mesh.position.y=height/2; mesh.userData=g.userData; g.add(mesh);
+  if(m.type!=='wallpath'){
+    const edge=new THREE.LineSegments(new THREE.EdgesGeometry(geo,25),new THREE.LineBasicMaterial({color:sel?0xffffff:0xdbeafe,transparent:true,opacity:.48}));
+    edge.position.copy(mesh.position); edge.userData=g.userData; g.add(edge);
+    g.position.set(m.x,0,m.z);g.rotation.y=-THREE.MathUtils.degToRad(m.angle||0);
+  }
   return g;
 }
-function makeMark(m){const g=new THREE.Group();g.position.set(m.x||0,.2,m.z||0);g.userData={kind:'mark',id:m.id};const a=new THREE.Mesh(new THREE.CylinderGeometry(.6,.6,.15,24),new THREE.MeshStandardMaterial({color:0xfacc15}));a.userData={kind:'mark',id:m.id};g.add(a);const s=new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,2.6,12),new THREE.MeshStandardMaterial({color:0xfacc15}));s.position.y=1.35;s.userData={kind:'mark',id:m.id};g.add(s);return g}
-function renderObjects(){
-  clearGroup(environmentRoot);clearGroup(cameraRoot);clearGroup(markRoot);
-  newCameraStars=[];
-  if(!currentScene){renderWallDraft();return}
-  currentScene.obstacles=currentScene.obstacles||[];
-  currentScene.cameras=currentScene.cameras||[];
-  currentScene.marks=currentScene.marks||[];
-  currentScene.obstacles.forEach(o=>environmentRoot.add(makeObstacle(o)));
-  currentScene.cameras.forEach(c=>{
-    cameraRoot.add(makeCamera(c));
-    if(c.showFov!==false)cameraRoot.add(cameraCoverage(c));
-    if(c.status==='new')cameraRoot.add(makeNewCameraStar(c));
-  });
-  currentScene.marks.forEach(m=>markRoot.add(makeMark(m)));
-  refreshCounts();
-  renderWallDraft();
+function renderDrafts(){
+  clearGroup(draftRoot);
+  if(draftWall.points.length){ const pts=[...draftWall.points]; if(draftWall.mousePoint)pts.push(draftWall.mousePoint); if(pts.length>=2)draftRoot.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts.map(p=>new THREE.Vector3(p.x,.15,p.z))),new THREE.LineBasicMaterial({color:0xf59e0b}))); draftWall.points.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.22,12,12),new THREE.MeshStandardMaterial({color:0xf59e0b}));m.position.set(p.x,.15,p.z);draftRoot.add(m);}); }
+  if(calibrationDraft.points.length){ calibrationDraft.points.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.28,14,14),new THREE.MeshStandardMaterial({color:0x22d3ee}));m.position.set(p.x,.2,p.z);draftRoot.add(m);}); if(calibrationDraft.points.length===2){draftRoot.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(calibrationDraft.points.map(p=>new THREE.Vector3(p.x,.2,p.z))),new THREE.LineBasicMaterial({color:0x22d3ee})));} }
 }
-function buildScene(){buildFloor();renderObjects();resize();if(currentScene?.plan)resetView()}
-function planePoint(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);const p=new THREE.Vector3();return raycaster.ray.intersectPlane(dragPlane,p)?p:null}
-function hit(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);for(const h of raycaster.intersectObjects([environmentRoot,cameraRoot,markRoot],true)){let o=h.object;while(o&&!o.userData?.kind)o=o.parent;if(o?.userData?.kind&&o.userData.kind!=='camera-coverage')return o.userData}return null}
-function addObstacle(type,x,z){currentScene.obstacles=currentScene.obstacles||[];const n=currentScene.obstacles.filter(o=>o.type===type).length+1,labels={wall:'牆體',column:'柱子',car:'汽車',motorcycle:'機車',parking:'停車格'},o={id:uid('obs'),type,name:`${labels[type]}-${String(n).padStart(2,'0')}`,x,z,angle:0,fixed:type==='wall',hidden:false,occludes:type!=='parking',length:8,height:2.8,thickness:.18,width:type==='parking'?2.5:.8,depth:type==='parking'?5:.8};currentScene.obstacles.push(o);selected={kind:'obstacle',id:o.id};renderObjects();showProperties();saveProject(false)}
-renderer.domElement.addEventListener('pointerdown',e=>{
-  if(!currentScene?.plan)return;
-  const p=planePoint(e);
-  if(!p)return;
+function renderObjects(){ clearGroup(cameraRoot);clearGroup(moduleRoot);currentCameras().forEach(c=>cameraRoot.add(makeCameraMesh(c)));currentModules().forEach(m=>moduleRoot.add(makeModuleMesh(m)));renderDrafts(); }
 
-  if(mode==='add-wall'){
-    // 已有三個以上節點，點回第一點（螢幕距離 20px 內）即封閉並完成。
-    if(draftWall.points.length>=3&&screenDistanceToWorldPoint(e,draftWall.points[0])<=20){
-      finishWall(true);
-      return;
+function refreshSiteUI(){
+  els.communitySelect.innerHTML=catalog.communities.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join(''); els.communitySelect.value=state.communityId;
+  const c=currentCommunity(); els.floorSelect.innerHTML=(c?.floors||[]).map(f=>`<option value="${esc(f.id)}">${esc(f.name)}</option>`).join(''); els.floorSelect.value=state.floor;
+  renderFloorTabs(); const f=currentFloorMeta(); els.floorTitle.textContent=f?.name||'未選擇樓層'; els.floorChip.textContent=f?.id||'—'; els.floorPlanInfo.textContent=`${c?.name||'—'} / ${f?.name||'—'}${f?.sourceType==='builtin'?'｜內建圖面':'｜自訂圖面'}`;
+  const cal=getCalibration(); if(cal){els.scaleBadge.textContent='已校正';els.calibrationMeters.value=cal.meters;els.calibrationWorld.value=`${cal.worldDistance.toFixed(2)} 單位`;els.calibrationStatus.textContent=`已校正：${cal.meters} m = 圖上 ${cal.worldDistance.toFixed(2)} 單位｜1 m = ${cal.unitsPerMeter.toFixed(4)} 圖上單位`;}else{els.scaleBadge.textContent='未校正';els.calibrationWorld.value='';els.calibrationStatus.textContent='尚未校正。先在圖紙上選兩個有已知實際距離的點位。';}
+}
+function renderFloorTabs(){ const c=currentCommunity(); floorTabsNav.innerHTML=(c?.floors||[]).map(f=>`<button class="floor-tab ${f.id===state.floor?'active':''}" data-floor="${esc(f.id)}">${esc(f.name)}</button>`).join(''); floorTabsNav.querySelectorAll('.floor-tab').forEach(btn=>btn.onclick=()=>switchFloor(btn.dataset.floor)); }
+function refreshUI(){
+  refreshSiteUI();
+  els.statusText.textContent=`${currentCommunity()?.name||''} / ${currentFloorMeta()?.name||''}｜版本 ${APP_VERSION}`;
+  els.listFilter.value=state.listFilter;
+  els.cameraCount.textContent=currentCameras().length;
+  els.moduleCount.textContent=currentModules().length;
+  const c=selCamera(),m=selModule();
+  els.selectedFov.textContent=c?`${c.fov}°`:'—';
+  els.selectedType.textContent=c?'鏡頭':m?moduleTypeLabel(m):'—';
+  updateCameraEditor();
+  updateModuleEditor();
+  updateItemList();
+  $('planToggleBtn').classList.toggle('active',state.showPlan);
+  $('planToggleBtn').textContent=`平面底圖：${state.showPlan?'開':'關'}`;
+}
+function updateCameraEditor(){ const c=selCamera(); if(!c){els.noCamera.classList.remove('hidden');els.cameraForm.classList.add('hidden');return;} els.noCamera.classList.add('hidden');els.cameraForm.classList.remove('hidden');camInputs.name.value=c.name;camInputs.lens.value=String(c.lens);camInputs.lensFov.value=`${LENS_PRESETS[String(c.lens)]?.fov??c.fov}°`;camInputs.color.value=c.colorKey;camInputs.colorLabel.value=c.colorLabel;camInputs.fixed.checked=!!c.fixed;camInputs.fov.value=c.fov;camInputs.fovOut.value=`${c.fov}°`;camInputs.range.value=c.range;camInputs.rangeOut.value=`${c.range}m`;camInputs.yaw.value=c.yaw;camInputs.yawOut.value=`${c.yaw}°`;camInputs.note.value=c.note||''; }
+function wallPathTotalMeters(m){ if(m.type!=='wallpath'||!Array.isArray(m.points)||m.points.length<2)return Number(m.length||0); let total=0;const count=m.closed?m.points.length:m.points.length-1;for(let i=0;i<count;i++){const a=m.points[i],b=m.points[(i+1)%m.points.length];total+=Math.hypot(b.x-a.x,b.z-a.z);}return +worldToMeters(total).toFixed(3); }
+function updateModuleEditor(){ const m=selModule(); if(!m){els.noModule.classList.remove('hidden');els.moduleForm.classList.add('hidden');return;} const wall=isWallModule(m),path=m.type==='wallpath',vehicle=isVehicleModule(m); els.noModule.classList.add('hidden');els.moduleForm.classList.remove('hidden');modInputs.name.value=m.name;modInputs.type.value=moduleTypeLabel(m);modInputs.length.value=path?wallPathTotalMeters(m):m.length;modInputs.length.disabled=path;modInputs.width.value=m.width??.8;modInputs.height.value=m.height;modInputs.thickness.value=m.thickness??.2;modInputs.angle.value=m.angle||0;modInputs.angleOut.value=path?'連續路徑':`${m.angle||0}°`;modInputs.angle.disabled=path;modInputs.fixed.checked=!!m.fixed; modInputs.occludes.checked = m.occludes !== false; modInputs.occludeWrap.classList.toggle('hidden', !vehicle); modInputs.widthWrap.classList.toggle('hidden',wall);modInputs.thicknessWrap.classList.toggle('hidden',!wall); }
+function updateItemList(){
+  let items=[];
+  if(state.listFilter==='camera'||state.listFilter==='all') items.push(...currentCameras().map(d=>({kind:'camera',d})));
+  if(state.listFilter==='wall'||state.listFilter==='all') items.push(...currentModules().filter(d=>isWallModule(d)).map(d=>({kind:'module',d})));
+  if(state.listFilter==='column'||state.listFilter==='all') items.push(...currentModules().filter(d=>d.type==='column').map(d=>({kind:'module',d})));
+  if(state.listFilter==='car'||state.listFilter==='all') items.push(...currentModules().filter(d=>d.type==='car').map(d=>({kind:'module',d})));
+  if(state.listFilter==='motorcycle'||state.listFilter==='all') items.push(...currentModules().filter(d=>d.type==='motorcycle').map(d=>({kind:'module',d})));
+  if(!items.length){ els.itemList.innerHTML='<div class="empty-list">目前篩選類別沒有資料</div>'; return; }
+  els.itemList.innerHTML=items.map(({kind,d})=>{
+    if(kind==='camera'){
+      const p=CAMERA_COLOR_PRESETS[d.colorKey]||CAMERA_COLOR_PRESETS.red, sel=state.selected.kind==='camera'&&state.selected.id===d.id?'selected':'';
+      return `<div class="item ${sel}" data-kind="camera" data-id="${esc(d.id)}"><div><strong>${esc(d.name)}</strong><small>${esc(d.colorLabel)}・${d.fixed?'固定':'可移動'}・FOV ${d.fov}°</small></div><span class="pill" style="background:${colorToHex(p.body)}">${esc(d.colorLabel)}</span></div>`;
     }
-    draftWall.points.push({x:+p.x.toFixed(3),z:+p.z.toFixed(3)});
-    draftWall.mousePoint={x:+p.x.toFixed(3),z:+p.z.toFixed(3)};
-    renderWallDraft();
-    return;
-  }
-
-  if(mode==='add-column'){addObstacle('column',p.x,p.z);setMode('select');return}
-  if(mode==='add-car'){addObstacle('car',p.x,p.z);setMode('select');return}
-  if(mode==='add-motorcycle'){addObstacle('motorcycle',p.x,p.z);setMode('select');return}
-  if(mode==='add-parking'){addObstacle('parking',p.x,p.z);setMode('select');return}
-  if(mode==='add-camera'){addCamera(p.x,p.z);setMode('select');return}
-  if(mode==='add-mark'){addMark(p.x,p.z);setMode('select');return}
-
-  const h=hit(e);
-  if(!h){
-    selected={kind:null,id:null};
-    showProperties();
-    renderObjects();
-    return;
-  }
-
-  selected={kind:h.kind,id:h.id};
-  showProperties();
-  renderObjects();
-
-  const obj=
-    h.kind==='camera'?currentScene.cameras.find(x=>x.id===h.id):
-    h.kind==='mark'?currentScene.marks.find(x=>x.id===h.id):
-    currentScene.obstacles.find(x=>x.id===h.id);
-
-  if((h.kind==='camera'||h.kind==='obstacle')&&obj?.fixed)return;
-  drag={...h,last:{x:p.x,z:p.z}};
-  controls.enabled=false;
-});
-renderer.domElement.addEventListener('pointermove',e=>{
-  const p=planePoint(e);
-
-  if(mode==='add-wall'&&draftWall.points.length){
-    if(p){
-      draftWall.mousePoint={x:+p.x.toFixed(3),z:+p.z.toFixed(3)};
-      renderWallDraft();
-    }
-    return;
-  }
-
-  if(!drag||!currentScene||!p)return;
-
-  const arr=
-    drag.kind==='camera'?currentScene.cameras:
-    drag.kind==='mark'?currentScene.marks:
-    currentScene.obstacles;
-
-  const o=arr.find(x=>x.id===drag.id);
-  if(!o)return;
-
-  if(o.type==='wallpath'&&Array.isArray(o.points)){
-    const dx=p.x-drag.last.x,dz=p.z-drag.last.z;
-    o.points=o.points.map(pt=>({
-      x:+(pt.x+dx).toFixed(3),
-      z:+(pt.z+dz).toFixed(3)
-    }));
-    drag.last={x:p.x,z:p.z};
-  }else{
-    o.x=p.x;
-    o.z=p.z;
-    drag.last={x:p.x,z:p.z};
-  }
-
-  renderObjects();
-});
-renderer.domElement.addEventListener('pointerup',()=>{if(drag){drag=null;controls.enabled=true;saveProject(false)}});
-
-window.addEventListener('keydown',e=>{
-  if(mode!=='add-wall')return;
-
-  if(e.key==='Enter'){
-    e.preventDefault();
-    finishWall(false);
-  }else if(e.key==='Escape'){
-    e.preventDefault();
-    draftWall={points:[],mousePoint:null};
-    setMode('select');
-    renderWallDraft();
-    toast('已取消牆體繪製');
-  }
-});
-
-
-function newProject(data){return{id:uid('project'),name:data.name,siteType:data.siteType,address:data.address||'',note:data.note||'',createdAt:now(),updatedAt:now(),version:APP_VERSION,scenes:[]}}
-function newScene(type,name){return{id:uid('scene'),type,name:name||type,plan:null,cameras:[],marks:[],obstacles:[]}}
-async function saveProject(show=true){if(!currentProject)return;currentProject.name=$('projectNameInput').value.trim()||currentProject.name;currentProject.updatedAt=now();currentProject.version=APP_VERSION;await dbPut(clone(currentProject));$('editorProjectName').textContent=currentProject.name;$('saveInfo').textContent=`本機已儲存 ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;if(show){try{if(APP_CONFIG.cloudApi?.enabled){await saveProjectCloud(currentProject);await dbPut(clone(currentProject))}toast('專案已儲存')}catch(err){setCloudStatus(false,'雲端儲存失敗');alert(`本機已儲存，但 Google Drive 同步失敗：${err.message}`)}}}
-async function renderProjectCards(){const list=await dbAll(),el=$('projectCards');if(!list.length){el.innerHTML='<div class="empty-card">尚無專案。先按「建立新專案」，再建立樓層與匯入圖面。</div>';return}el.innerHTML=list.map(p=>{const n=(p.scenes||[]).reduce((s,x)=>s+(x.cameras?.length||0),0);return `<article class="project-card"><div><h3>${esc(p.name)}</h3><div class="meta">${esc(p.siteType||'')}<br>${p.scenes?.length||0} 個樓層・${n} 支鏡頭</div></div><div class="card-footer"><span class="meta">${new Date(p.updatedAt).toLocaleString()}</span><button data-open="${esc(p.id)}">開啟專案</button></div></article>`}).join('');el.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openProject(b.dataset.open))}
-async function openProject(id){const p=await dbGet(id);if(!p)return;currentProject=p;(currentProject.scenes||[]).forEach(s=>{s.cameras=s.cameras||[];s.marks=s.marks||[];s.obstacles=s.obstacles||[];s.obstacles.forEach(o=>{if((o.type==='wall'||o.type==='wallpath')&&typeof o.fixed!=='boolean')o.fixed=true;});});currentScene=p.scenes?.[0]||null;selected={kind:null,id:null};$('projectHome').classList.add('hidden');$('editorApp').classList.remove('hidden');$('projectNameInput').value=p.name;applyPanels();refreshEditor()}
-async function goHome(){if(currentProject)await saveProject(false);currentProject=null;currentScene=null;$('editorApp').classList.add('hidden');$('projectHome').classList.remove('hidden');renderProjectCards()}
-function renderSceneTree(){const el=$('sceneTree');if(!currentProject?.scenes?.length){el.innerHTML='<div class="empty-card" style="padding:18px">尚未建立樓層</div>';return}el.innerHTML=currentProject.scenes.map(s=>`<div class="scene-item ${currentScene?.id===s.id?'active':''}" data-id="${s.id}"><div class="scene-icon">${esc(s.type)}</div><div class="scene-text"><strong>${esc(s.name)}</strong><small>${s.plan?esc(s.plan.fileName):'尚未匯入圖面'}</small></div><span class="dot ${s.plan?'ready':''}"></span></div>`).join('');el.querySelectorAll('.scene-item').forEach(x=>x.onclick=()=>{currentScene=currentProject.scenes.find(s=>s.id===x.dataset.id);selected={kind:null,id:null};refreshEditor()})}
-function refreshCounts(){if(!currentProject)return;const tc=currentProject.scenes.reduce((n,s)=>n+(s.cameras?.length||0),0),tm=currentProject.scenes.reduce((n,s)=>n+(s.marks?.length||0),0);$('sceneCount').textContent=currentProject.scenes.length;$('projectCameraCount').textContent=tc;$('projectMarkCount').textContent=tm;$('sceneCameraCount').textContent=currentScene?.cameras?.length||0;$('sceneMarkCount').textContent=currentScene?.marks?.length||0;$('sceneObstacleCount').textContent=currentScene?.obstacles?.length||0;$('cameraInfo').textContent=`鏡頭：${currentScene?.cameras?.length||0}`;$('planInfo').textContent=`圖面：${currentScene?.plan?.fileName||'—'}`;if($('camCountExisting'))$('camCountExisting').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='existing').length;if($('camCountNew'))$('camCountNew').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='new').length;if($('camCountFault'))$('camCountFault').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='fault').length}
-function refreshEditor(){if(!currentProject)return;$('editorProjectName').textContent=currentProject.name;$('editorSceneName').textContent=currentScene?.name||'尚未建立樓層';$('floorBadge').textContent=currentScene?.type||'—';$('emptyScene').classList.toggle('hidden',!!currentScene);$('emptyPlan').classList.toggle('hidden',!currentScene||!!currentScene.plan);renderSceneTree();refreshCounts();buildScene();showProperties();renderTools('project');if(currentScene){$('sceneNameInput').value=currentScene.name;$('sceneTypeInput').value=FLOORS.includes(currentScene.type)?currentScene.type:'自訂';$('planOpacityInput').value=currentScene.plan?.opacity??1;$('planOpacityOut').textContent=`${Math.round((currentScene.plan?.opacity??1)*100)}%`;$('planRotationInput').value=String(currentScene.plan?.rotation||0)}}
-function showProperties(){['sceneProperties','cameraProperties','markProperties','obstacleProperties'].forEach(id=>$(id)?.classList.add('hidden'));if(selected.kind==='camera'){const c=currentScene?.cameras.find(x=>x.id===selected.id);if(!c)return;$('propertyTitle').textContent='監視器屬性';$('cameraProperties').classList.remove('hidden');$('camName').value=c.name;$('camStatus').value=c.status;$('camLens').value=c.lens;$('camYaw').value=c.yaw;$('camYawOut').textContent=`${c.yaw}°`;$('camRange').value=c.range;$('camRangeOut').textContent=`${c.range}m`;$('camHeight').value=c.height;$('camFixed').checked=!!c.fixed;$('camShowFov').checked=c.showFov!==false;$('camNote').value=c.note||'';return}if(selected.kind==='obstacle'){const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(!o)return;$('propertyTitle').textContent='環境物件屬性';$('obstacleProperties').classList.remove('hidden');$('obsName').value=o.name||'';$('obsType').value=o.type||'wall';$('obsAngle').value=o.angle||0;$('obsLength').value=o.type==='wallpath'?wallPathLength(o).toFixed(2):(o.length||8);$('obsWidth').value=o.width||.8;$('obsDepth').value=o.depth||.8;$('obsHeight').value=o.height||2.8;$('obsThickness').value=o.thickness||.18;$('obsOccludes').checked=o.occludes!==false;$('obsFixed').checked=!!o.fixed;$('obsHidden').checked=!!o.hidden;$('obsAngle').disabled=o.type==='wallpath';$('obsLength').disabled=o.type==='wallpath';return}if(selected.kind==='mark'){const m=currentScene?.marks.find(x=>x.id===selected.id);if(!m)return;$('propertyTitle').textContent='標記屬性';$('markProperties').classList.remove('hidden');$('markTitle').value=m.title;$('markType').value=m.type;$('markText').value=m.text||'';$('markPublic').checked=m.public!==false;return}$('obsAngle').disabled=false;$('obsLength').disabled=false;$('propertyTitle').textContent='場景屬性';$('sceneProperties').classList.remove('hidden')}
-function addCamera(x,z){const n=currentScene.cameras.length+1,c={id:uid('cam'),name:`CAM-${currentScene.type}-${String(n).padStart(2,'0')}`,x,z,yaw:0,height:2.8,lens:'2.8',range:14,status:'existing',fixed:false,showFov:true,note:''};currentScene.cameras.push(c);selected={kind:'camera',id:c.id};renderObjects();showProperties();saveProject(false)}
-function addMark(x,z){const n=currentScene.marks.length+1,m={id:uid('mark'),title:`標記-${String(n).padStart(2,'0')}`,type:'note',text:'',public:true,x,z};currentScene.marks.push(m);selected={kind:'mark',id:m.id};renderObjects();showProperties();saveProject(false)}
-function setMode(m){const prev=mode;mode=m;if(prev==='add-wall'&&m!=='add-wall'&&draftWall.points.length===0)draftWall={points:[],mousePoint:null};const map={'add-camera':'請在平面圖上點選「監視器安裝位置」','add-mark':'請在平面圖上點選「標記位置」','add-wall':'連續牆體：依序點選路徑；點回第一點自動封閉完成；Enter 結束開放牆；Esc 取消','add-column':'請點選柱子位置','add-car':'請點選汽車位置','add-motorcycle':'請點選機車位置','add-parking':'請點選停車格位置'};const text=map[m]||'';$('modeHint').textContent=text;$('modeHint').classList.toggle('hidden',!text);controls.enabled=m==='select'&&!drag;renderWallDraft()}
-
-function syncCam(){const c=currentScene?.cameras.find(x=>x.id===selected.id);if(!c)return;const prevLens=c.lens;c.name=$('camName').value||c.name;c.status=$('camStatus').value;c.lens=$('camLens').value;c.yaw=+$('camYaw').value;c.range=+$('camRange').value;c.height=+$('camHeight').value||2.8;c.fixed=$('camFixed').checked;c.showFov=$('camShowFov').checked;c.note=$('camNote').value;if(prevLens!==c.lens){const p=LENS[c.lens]||LENS['2.8'];c.range=p.range;$('camRange').value=p.range}$('camYawOut').textContent=`${c.yaw}°`;$('camRangeOut').textContent=`${c.range}m`;renderObjects()}
-['camName','camStatus','camLens','camYaw','camRange','camHeight','camFixed','camShowFov','camNote'].forEach(id=>{$(id).addEventListener('input',syncCam);$(id).addEventListener('change',syncCam)});
-function syncMark(){const m=currentScene?.marks.find(x=>x.id===selected.id);if(!m)return;m.title=$('markTitle').value||m.title;m.type=$('markType').value;m.text=$('markText').value;m.public=$('markPublic').checked}
-['markTitle','markType','markText','markPublic'].forEach(id=>{$(id).addEventListener('input',syncMark);$(id).addEventListener('change',syncMark)});
-function syncObstacle(){const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(!o)return;o.name=$('obsName').value||o.name;if(o.type!=='wallpath'){o.type=$('obsType').value;o.angle=+$('obsAngle').value||0;o.length=+$('obsLength').value||8}o.width=+$('obsWidth').value||.8;o.depth=+$('obsDepth').value||.8;o.height=+$('obsHeight').value||2.8;o.thickness=+$('obsThickness').value||.18;o.occludes=$('obsOccludes').checked;o.fixed=$('obsFixed').checked;o.hidden=$('obsHidden').checked;if(o.type==='wallpath')o.length=+wallPathLength(o).toFixed(2);renderObjects()}
-['obsName','obsType','obsAngle','obsLength','obsWidth','obsDepth','obsHeight','obsThickness','obsOccludes','obsFixed','obsHidden'].forEach(id=>{$(id).addEventListener('input',syncObstacle);$(id).addEventListener('change',syncObstacle)});
-
-async function imageToData(file){return new Promise((resolve,reject)=>{const fr=new FileReader();fr.onload=()=>{const img=new Image();img.onload=()=>{const max=2200,s=Math.min(1,max/img.width),c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);resolve({dataUrl:c.toDataURL('image/jpeg',.9),width:c.width,height:c.height})};img.onerror=reject;img.src=fr.result};fr.onerror=reject;fr.readAsDataURL(file)})}
-async function pdfToData(file){const pdfjs=await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');pdfjs.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';const pdf=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise,p=await pdf.getPage(1),v0=p.getViewport({scale:1}),s=Math.min(2,2200/v0.width),v=p.getViewport({scale:s}),c=document.createElement('canvas');c.width=Math.round(v.width);c.height=Math.round(v.height);await p.render({canvasContext:c.getContext('2d'),viewport:v}).promise;return{dataUrl:c.toDataURL('image/jpeg',.9),width:c.width,height:c.height}}
-function parseDxf(text){const l=text.replace(/\r/g,'').split('\n'),pairs=[];for(let i=0;i+1<l.length;i+=2)pairs.push([+l[i].trim(),l[i+1].trim()]);const seg=[];for(let i=0;i<pairs.length;){const [c,v]=pairs[i];if(c===0&&v==='LINE'){let x1=0,y1=0,x2=0,y2=0;i++;while(i<pairs.length&&pairs[i][0]!==0){const [k,z]=pairs[i];if(k===10)x1=+z;else if(k===20)y1=+z;else if(k===11)x2=+z;else if(k===21)y2=+z;i++}seg.push([x1,y1,x2,y2]);continue}i++}return seg}
-async function dxfToData(file){const s=parseDxf(await file.text());if(!s.length)throw new Error('DXF 未找到 LINE 線段，請先輸出成 PDF。');const xs=[],ys=[];s.forEach(a=>{xs.push(a[0],a[2]);ys.push(a[1],a[3])});const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),sx=Math.max(1,maxX-minX),sy=Math.max(1,maxY-minY),W=1800,H=Math.max(900,Math.round(W*sy/sx)),pad=50,scale=Math.min((W-pad*2)/sx,(H-pad*2)/sy),c=document.createElement('canvas'),ctx=c.getContext('2d');c.width=W;c.height=H;ctx.fillStyle='#f7f7f3';ctx.fillRect(0,0,W,H);ctx.strokeStyle='#222';ctx.beginPath();s.forEach(([x1,y1,x2,y2])=>{ctx.moveTo(pad+(x1-minX)*scale,H-pad-(y1-minY)*scale);ctx.lineTo(pad+(x2-minX)*scale,H-pad-(y2-minY)*scale)});ctx.stroke();return{dataUrl:c.toDataURL('image/png'),width:W,height:H}}
-async function importPlan(file){if(!currentScene)return;if(/\.dwg$/i.test(file.name)){alert('DWG 目前請先轉成 DXF 或 PDF。');return}let r;if(file.type.startsWith('image/'))r=await imageToData(file);else if(file.type==='application/pdf'||/\.pdf$/i.test(file.name))r=await pdfToData(file);else if(/\.dxf$/i.test(file.name))r=await dxfToData(file);else throw new Error('不支援此格式');currentScene.plan={fileName:file.name,dataUrl:r.dataUrl,width:r.width,height:r.height,opacity:1,rotation:0};await saveProject(false);refreshEditor();toast('圖面已匯入')}
-$('planFileInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{await importPlan(f)}catch(err){alert(err.message)}e.target.value=''};$('choosePlanBtn').onclick=()=>$('planFileInput').click();$('replacePlanBtn').onclick=()=>$('planFileInput').click();$('removePlanBtn').onclick=async()=>{if(!currentScene?.plan)return;if(confirm('移除此樓層圖面？')){currentScene.plan=null;await saveProject(false);refreshEditor()}};const dz=$('dropZone');['dragenter','dragover'].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.add('dragover')}));['dragleave','drop'].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.remove('dragover')}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files?.[0];if(f)importPlan(f)});
-
-
-function cameraStatusLabel(status){
-  return status==='new'?'增設':status==='fault'?'故障':'原建置';
-}
-function cameraStatusColor(status){
-  return status==='new'?'#eab308':status==='fault'?'#f97316':'#dc2626';
-}
-function reportSceneList(scope){
-  if(!currentProject)return [];
-  if(scope==='all')return currentProject.scenes||[];
-  return currentScene?[currentScene]:[];
-}
-function updateReportModalSummary(){
-  const scenes=reportSceneList($('reportScope')?.value||'current');
-  const cams=scenes.flatMap(s=>s.cameras||[]);
-  $('reportProjectName').textContent=currentProject?.name||'—';
-  $('reportFloorName').textContent=$('reportScope')?.value==='all'?'全部樓層':(currentScene?.name||'—');
-  $('reportCameraCount').textContent=cams.length;
-  $('reportNewCameraCount').textContent=cams.filter(c=>c.status==='new').length;
-}
-function openCameraReportModal(){
-  if(!currentProject)return toast('請先開啟專案');
-  if(!currentProject.scenes?.length)return toast('目前專案沒有樓層');
-  $('reportScope').value='current';
-  $('reportIncludeSnapshot').checked=true;
-  $('reportIncludeNotes').checked=true;
-  $('reportOnlyPublicMarks').checked=true;
-  updateReportModalSummary();
-  showModal('cameraReportModal');
-}
-function rendererSnapshotDataUrl(){
-  try{
-    renderer.render(scene3d,camera3d);
-    return renderer.domElement.toDataURL('image/png',.92);
-  }catch(err){
-    console.warn('3D snapshot failed:',err);
-    return '';
-  }
-}
-function buildCameraReportHtml({autoPrint=false}={}){
-  const scope=$('reportScope').value;
-  const includeSnapshot=$('reportIncludeSnapshot').checked;
-  const includeNotes=$('reportIncludeNotes').checked;
-  const onlyPublicMarks=$('reportOnlyPublicMarks').checked;
-  const scenes=reportSceneList(scope);
-  const allCams=scenes.flatMap(s=>(s.cameras||[]).map(c=>({scene:s,camera:c})));
-  const existing=allCams.filter(x=>x.camera.status==='existing').length;
-  const added=allCams.filter(x=>x.camera.status==='new').length;
-  const fault=allCams.filter(x=>x.camera.status==='fault').length;
-  const snapshot=includeSnapshot?rendererSnapshotDataUrl():'';
-  const generated=new Date().toLocaleString('zh-TW');
-
-  const escHtml=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-
-  const sceneSections=scenes.map(s=>{
-    const cams=s.cameras||[];
-    const marks=(s.marks||[]).filter(m=>!onlyPublicMarks||m.public!==false);
-    const rows=cams.length?cams.map((c,i)=>`
-      <tr>
-        <td>${i+1}</td>
-        <td>${escHtml(c.name)}</td>
-        <td><span class="status-dot" style="background:${cameraStatusColor(c.status)}"></span>${cameraStatusLabel(c.status)}</td>
-        <td>${escHtml(c.lens)} mm</td>
-        <td>${escHtml(c.range)} m</td>
-        <td>${escHtml(c.yaw)}°</td>
-        <td>${escHtml(c.height)} m</td>
-        <td>${c.fixed?'是':'否'}</td>
-        ${includeNotes?`<td>${escHtml(c.note||'')}</td>`:''}
-      </tr>`).join(''):`<tr><td colspan="${includeNotes?9:8}" class="empty-row">此樓層尚無監視器</td></tr>`;
-
-    const markRows=marks.length?`
-      <div class="marks">
-        <h4>標記 / 說明</h4>
-        ${marks.map(m=>`<div class="mark-item"><b>${escHtml(m.title||'標記')}</b><span>${escHtml(m.text||'')}</span></div>`).join('')}
-      </div>`:'';
-
-    return `
-      <section class="floor-section">
-        <div class="floor-title">
-          <h2>${escHtml(s.type||'')}｜${escHtml(s.name||'')}</h2>
-          <span>${cams.length} 支鏡頭</span>
-        </div>
-        <table>
-          <thead><tr>
-            <th>#</th><th>鏡頭名稱</th><th>狀態</th><th>焦段</th>
-            <th>距離</th><th>方向</th><th>高度</th><th>固定</th>
-            ${includeNotes?'<th>備註</th>':''}
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-        ${markRows}
-      </section>`;
+    const sel=state.selected.kind==='module'&&state.selected.id===d.id?'selected':'';
+    const wall=isWallModule(d);
+    const cls=wall?'wall':(d.type==='column'?'column':'project');
+    const tag=wall?'WALL':(d.type==='column'?'COLUMN':(d.type==='car'?'CAR':'MOTO'));
+    return `<div class="item ${sel}" data-kind="module" data-id="${esc(d.id)}"><div><strong>${esc(d.name)}</strong><small>${moduleTypeLabel(d)}・${d.fixed?'固定':'可移動'}${isVehicleModule(d)?`・${d.occludes===false?'不遮擋視角':'遮擋視角'}`:''}</small></div><span class="pill ${cls}">${tag}</span></div>`;
   }).join('');
-
-  const snapshotHtml=snapshot?`
-    <section class="snapshot-section">
-      <h2>3D 配置畫面</h2>
-      <img src="${snapshot}" alt="3D CCTV 配置畫面">
-      <p class="small">黃色閃爍星星代表「增設鏡頭」。</p>
-    </section>`:'';
-
-  return `<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8">
-<title>${escHtml(currentProject.name)}｜CCTV 鏡頭配置報告</title>
-<style>
-  *{box-sizing:border-box}body{font-family:"Microsoft JhengHei","Noto Sans TC",sans-serif;margin:0;color:#18212b;background:#fff}
-  .page{max-width:1180px;margin:auto;padding:28px}
-  .head{border-bottom:3px solid #123a54;padding-bottom:14px;margin-bottom:18px}
-  .head h1{margin:0 0 6px;font-size:27px}.head p{margin:2px 0;color:#5c6b77;font-size:12px}
-  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:16px 0 20px}
-  .summary div{border:1px solid #d5dee5;border-radius:8px;padding:10px;background:#f8fafc}
-  .summary span{display:block;color:#667784;font-size:10px}.summary b{font-size:18px}
-  .snapshot-section{page-break-inside:avoid;margin:20px 0}.snapshot-section h2,.floor-title h2{font-size:17px;margin:0 0 10px}
-  .snapshot-section img{width:100%;max-height:590px;object-fit:contain;border:1px solid #d5dee5;background:#0b1520}
-  .small{font-size:10px;color:#6c7a86}
-  .floor-section{margin:24px 0;page-break-inside:auto}
-  .floor-title{display:flex;justify-content:space-between;align-items:center;border-left:5px solid #1f7892;padding-left:10px;margin-bottom:9px}
-  .floor-title span{font-size:11px;color:#5f7180}
-  table{border-collapse:collapse;width:100%;font-size:10px}
-  th,td{border:1px solid #cfd8df;padding:6px;vertical-align:top}th{background:#edf3f7;text-align:left;white-space:nowrap}
-  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
-  .marks{margin-top:12px;border:1px solid #d9e1e6;border-radius:8px;padding:10px}.marks h4{margin:0 0 8px}
-  .mark-item{display:flex;gap:12px;border-top:1px solid #edf1f4;padding:6px 0;font-size:10px}.mark-item:first-of-type{border-top:0}
-  .mark-item b{min-width:120px}.empty-row{text-align:center;color:#74838e}
-  .footer{margin-top:24px;padding-top:10px;border-top:1px solid #d7dee3;font-size:9px;color:#71808c}
-  @media print{
-    @page{size:A4 landscape;margin:10mm}
-    .page{max-width:none;padding:0}
-    .summary{break-inside:avoid}
-    .snapshot-section{break-inside:avoid}
-    tr{break-inside:avoid}
-  }
-</style>
-</head>
-<body>
-<div class="page">
-  <div class="head">
-    <h1>${escHtml(currentProject.name)}｜CCTV 鏡頭配置報告</h1>
-    <p>案場類型：${escHtml(currentProject.siteType||'')}</p>
-    <p>地址：${escHtml(currentProject.address||'')}</p>
-    <p>產生時間：${generated}｜系統版本：${APP_VERSION}</p>
-  </div>
-
-  <div class="summary">
-    <div><span>鏡頭總數</span><b>${allCams.length}</b></div>
-    <div><span>原建置</span><b>${existing}</b></div>
-    <div><span>增設</span><b>${added}</b></div>
-    <div><span>故障</span><b>${fault}</b></div>
-  </div>
-
-  ${snapshotHtml}
-  ${sceneSections}
-
-  <div class="footer">3D CCTV Planner｜此報告供監視器配置、視野與增設位置說明使用。</div>
-</div>
-<script>
-  ${autoPrint?`window.addEventListener('load',()=>setTimeout(()=>window.print(),450));`:''}
-</script>
-</body>
-</html>`;
+  els.itemList.querySelectorAll('.item').forEach(el=>el.onclick=()=>setSelected(el.dataset.kind,el.dataset.id));
 }
 
-function openCameraReportPreview(autoPrint=false){
-  const report=buildCameraReportHtml({autoPrint});
-  const win=window.open('','_blank');
-  if(!win){
-    alert('瀏覽器阻擋了報告視窗，請允許此網站開啟彈出視窗。');
-    return;
+
+function mutateCamera(fn){const c=selCamera();if(!c)return;fn(c);saveWorking();renderObjects();refreshUI();}
+function mutateModule(fn){const m=selModule();if(!m)return;fn(m);saveWorking();renderObjects();refreshUI();}
+camInputs.name.oninput=()=>mutateCamera(c=>c.name=camInputs.name.value); camInputs.lens.onchange=()=>mutateCamera(c=>{c.lens=camInputs.lens.value;const p=LENS_PRESETS[c.lens];c.fov=p.fov;c.range=p.range;}); camInputs.color.onchange=()=>mutateCamera(c=>{const old=CAMERA_COLOR_PRESETS[c.colorKey]?.label;if(!c.colorLabel||c.colorLabel===old)c.colorLabel=CAMERA_COLOR_PRESETS[camInputs.color.value]?.label||c.colorLabel;c.colorKey=camInputs.color.value;}); camInputs.colorLabel.oninput=()=>mutateCamera(c=>c.colorLabel=camInputs.colorLabel.value||CAMERA_COLOR_PRESETS[c.colorKey].label); camInputs.fixed.onchange=()=>mutateCamera(c=>c.fixed=camInputs.fixed.checked); camInputs.fov.oninput=()=>mutateCamera(c=>c.fov=+camInputs.fov.value); camInputs.range.oninput=()=>mutateCamera(c=>c.range=+camInputs.range.value); camInputs.yaw.oninput=()=>mutateCamera(c=>c.yaw=+camInputs.yaw.value); camInputs.note.oninput=()=>mutateCamera(c=>c.note=camInputs.note.value);
+$('deleteCamBtn').onclick=()=>{const c=selCamera();if(!c)return;state.cameras[currentKey()]=currentCameras().filter(x=>x.id!==c.id);clearSelection();saveWorking();renderObjects();refreshUI();};
+modInputs.name.oninput=()=>mutateModule(m=>m.name=modInputs.name.value);modInputs.length.oninput=()=>mutateModule(m=>{if(m.type!=='wallpath')m.length=Math.max(.2,+modInputs.length.value||.2);});modInputs.width.oninput=()=>mutateModule(m=>m.width=Math.max(.2,+modInputs.width.value||.2));modInputs.height.oninput=()=>mutateModule(m=>m.height=Math.max(.2,+modInputs.height.value||.2));modInputs.thickness.oninput=()=>mutateModule(m=>m.thickness=Math.max(.05,+modInputs.thickness.value||.05));modInputs.angle.oninput=()=>mutateModule(m=>{if(m.type!=='wallpath')m.angle=+modInputs.angle.value;});modInputs.fixed.onchange=()=>mutateModule(m=>m.fixed=modInputs.fixed.checked);
+modInputs.occludes.onchange=()=>mutateModule(m=>{ if(isVehicleModule(m)) m.occludes = modInputs.occludes.checked; });
+$('deleteModuleBtn').onclick=()=>{const m=selModule();if(!m)return;state.modules[currentKey()]=currentModules().filter(x=>x.id!==m.id);clearSelection();saveWorking();renderObjects();refreshUI();}; $('clearModuleBtn').onclick=()=>{if(currentModules().length&&confirm(`確定清除 ${currentFloorMeta()?.name||''} 全部模組？`)){state.modules[currentKey()]=[];clearSelection();saveWorking();renderObjects();refreshUI();}};
+
+function setAddMode(mode){ state.addMode=state.addMode===mode?null:mode; if(mode!=='wall')draftWall={points:[],mousePoint:null}; controls.enabled=!state.addMode&&!dragState; const txt={camera:'請在圖面點一下新增鏡頭',column:'請在圖面點一下新增柱子',car:'請在圖面點一下新增汽車',motorcycle:'請在圖面點一下新增機車',wall:'連續牆體：依序點選路徑；點回第一點自動封閉完成，Enter 結束開放牆，Esc 取消',calibrate:'實尺校正：請依序點選兩個已知距離的點'}; els.addHint.classList.toggle('hidden',!state.addMode);els.addHint.textContent=txt[state.addMode]||''; $('addCameraBtn').classList.toggle('active',state.addMode==='camera');$('addWallBtn').classList.toggle('active',state.addMode==='wall');$('drawerAddWallBtn').classList.toggle('active',state.addMode==='wall');$('addColumnBtn').classList.toggle('active',state.addMode==='column');$('drawerAddColumnBtn').classList.toggle('active',state.addMode==='column'); $('addCarBtn').classList.toggle('active',state.addMode==='car');$('drawerAddCarBtn').classList.toggle('active',state.addMode==='car'); $('addMotorBtn').classList.toggle('active',state.addMode==='motorcycle');$('drawerAddMotorBtn').classList.toggle('active',state.addMode==='motorcycle'); renderDrafts(); }
+$('addCameraBtn').onclick=()=>setAddMode('camera');$('addWallBtn').onclick=()=>setAddMode('wall');$('drawerAddWallBtn').onclick=()=>setAddMode('wall');$('addColumnBtn').onclick=()=>setAddMode('column');$('drawerAddColumnBtn').onclick=()=>setAddMode('column');$('addCarBtn').onclick=()=>setAddMode('car');$('drawerAddCarBtn').onclick=()=>setAddMode('car');$('addMotorBtn').onclick=()=>setAddMode('motorcycle');$('drawerAddMotorBtn').onclick=()=>setAddMode('motorcycle');
+
+function eventWorld(evt){const r=renderer.domElement.getBoundingClientRect();pointer.x=((evt.clientX-r.left)/r.width)*2-1;pointer.y=-((evt.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(pointer,camera);const hit=raycaster.intersectObject(floorPlane,false)[0];if(hit)return{x:+hit.point.x.toFixed(3),z:+hit.point.z.toFixed(3)};const p=new THREE.Vector3();if(raycaster.ray.intersectPlane(dragPlane,p))return{x:+p.x.toFixed(3),z:+p.z.toFixed(3)};return null;}
+function hitEntity(evt){const r=renderer.domElement.getBoundingClientRect();pointer.x=((evt.clientX-r.left)/r.width)*2-1;pointer.y=-((evt.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(pointer,camera);const hits=raycaster.intersectObjects([...cameraRoot.children,...moduleRoot.children],true);if(!hits.length)return null;let o=hits[0].object;while(o){if(o.userData?.kind&&o.userData?.id)return o.userData;o=o.parent;}return null;}
+function screenDistanceToWorldPoint(evt,p){const rect=renderer.domElement.getBoundingClientRect(),v=new THREE.Vector3(p.x,0,p.z).project(camera),sx=rect.left+(v.x+1)*rect.width/2,sy=rect.top+(1-v.y)*rect.height/2;return Math.hypot(evt.clientX-sx,evt.clientY-sy);}
+renderer.domElement.addEventListener('pointerdown',evt=>{
+  const w=eventWorld(evt);
+  if(state.addMode==='camera'){if(!w)return;const p=LENS_PRESETS['4'],n=currentCameras().length+1,c={id:uid('cam'),name:`CAM-${currentFloorMeta()?.id||'F'}-${String(n).padStart(2,'0')}`,x:w.x,z:w.z,lens:'4',fov:p.fov,range:p.range,yaw:0,note:'',colorKey:'red',colorLabel:'原建置',fixed:false};currentCameras().push(c);state.selected={kind:'camera',id:c.id};saveWorking();setAddMode(null);renderObjects();refreshUI();return;}
+  if(state.addMode==='column'){if(!w)return;const n=currentModules().filter(x=>x.type==='column').length+1,m={id:uid('col'),type:'column',name:`COL-${currentFloorMeta()?.id||'F'}-${String(n).padStart(2,'0')}`,x:w.x,z:w.z,length:.8,width:.8,height:3,thickness:.8,angle:0,fixed:false};currentModules().push(m);state.selected={kind:'module',id:m.id};saveWorking();setAddMode(null);renderObjects();refreshUI();return;}
+  if(state.addMode==='car'){if(!w)return;const n=currentModules().filter(x=>x.type==='car').length+1,m={id:uid('car'),type:'car',name:`CAR-${currentFloorMeta()?.id||'F'}-${String(n).padStart(2,'0')}`,x:w.x,z:w.z,length:4.6,width:1.9,height:1.4,thickness:1.9,angle:0,fixed:false,occludes:true};currentModules().push(m);state.selected={kind:'module',id:m.id};saveWorking();setAddMode(null);renderObjects();refreshUI();return;}
+  if(state.addMode==='motorcycle'){if(!w)return;const n=currentModules().filter(x=>x.type==='motorcycle').length+1,m={id:uid('moto'),type:'motorcycle',name:`MOTO-${currentFloorMeta()?.id||'F'}-${String(n).padStart(2,'0')}`,x:w.x,z:w.z,length:2.0,width:0.8,height:1.1,thickness:0.8,angle:0,fixed:false,occludes:true};currentModules().push(m);state.selected={kind:'module',id:m.id};saveWorking();setAddMode(null);renderObjects();refreshUI();return;}
+  if(state.addMode==='wall'){
+    if(!w)return;
+    if(draftWall.points.length>=3 && screenDistanceToWorldPoint(evt,draftWall.points[0])<=20){ finalizeWall(true); return; }
+    draftWall.points.push(w);draftWall.mousePoint=w;renderDrafts();return;
   }
-  win.document.open();
-  win.document.write(report);
-  win.document.close();
-}
-
-function renderTools(menu){const data={project:[['儲存專案','save'],['匯出專案','export'],['新增樓層','new-scene']],plan:[['匯入 / 更換圖面','plan'],['透明度 100%','op1'],['透明度 50%','op5']],environment:[['＋ 牆體','add-wall'],['＋ 柱子','add-column'],['＋ 汽車','add-car'],['＋ 機車','add-motorcycle'],['＋ 停車格','add-parking']],camera:[['＋ 新增監視器','add-camera'],['顯示全部視野','show'],['隱藏全部視野','hide'],['全部設為原建置','cams-existing'],['全部設為增設','cams-new']],mark:[['＋ 新增標記','add-mark']],measure:[['兩點實尺校正（下一階段）','todo']],view:[['3D','3d'],['俯視','top'],['重設視角','reset'],['專注模式','focus']],report:[['輸出鏡頭配置報告','camera-report']]};$('toolShelf').innerHTML=`<span class="tool-label">${menu.toUpperCase()}</span>`+(data[menu]||[]).map(([x,a])=>`<button data-act="${a}">${x}</button>`).join('');$('toolShelf').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>runTool(b.dataset.act))}
-function runTool(a){if(a==='save')return saveProject();if(a==='export')return exportProject();if(a==='new-scene')return openSceneModal();if(a==='plan')return $('planFileInput').click();if(a==='op1'&&currentScene?.plan){currentScene.plan.opacity=1;buildFloor()}else if(a==='op5'&&currentScene?.plan){currentScene.plan.opacity=.5;buildFloor()}else if(a==='add-wall'){draftWall={points:[],mousePoint:null};setMode('add-wall');}else if(a==='add-column')setMode('add-column');else if(a==='add-car')setMode('add-car');else if(a==='add-motorcycle')setMode('add-motorcycle');else if(a==='add-parking')setMode('add-parking');else if(a==='add-camera')setMode('add-camera');else if(a==='add-mark')setMode('add-mark');else if(a==='show'){currentScene.cameras.forEach(c=>c.showFov=true);renderObjects()}else if(a==='hide'){currentScene.cameras.forEach(c=>c.showFov=false);renderObjects()}else if(a==='cams-existing'){currentScene.cameras.forEach(c=>c.status='existing');renderObjects()}else if(a==='cams-new'){currentScene.cameras.forEach(c=>c.status='new');renderObjects()}else if(a==='3d')resetView();else if(a==='top')topView();else if(a==='reset')resetView();else if(a==='focus')toggleFocus();else if(a==='camera-report')openCameraReportModal();else toast('此功能排在下一階段加入')}
-document.querySelectorAll('.main-menu button').forEach(b=>b.onclick=()=>renderTools(b.dataset.menu));
-
-function applyPanels(){const g=$('editorGrid');g.classList.toggle('left-collapsed',!!uiState.leftCollapsed);g.classList.toggle('right-collapsed',!!uiState.rightCollapsed);$('expandLeftBtn').classList.toggle('hidden',!uiState.leftCollapsed);$('expandRightBtn').classList.toggle('hidden',!uiState.rightCollapsed);requestAnimationFrame(resize)}
-$('collapseLeftBtn').onclick=()=>{uiState.leftCollapsed=true;saveUIState();applyPanels()};$('expandLeftBtn').onclick=()=>{uiState.leftCollapsed=false;saveUIState();applyPanels()};$('collapseRightBtn').onclick=()=>{uiState.rightCollapsed=true;saveUIState();applyPanels()};$('expandRightBtn').onclick=()=>{uiState.rightCollapsed=false;saveUIState();applyPanels()};function toggleFocus(){document.body.classList.toggle('focus-mode');requestAnimationFrame(resize)}$('focusModeBtn').onclick=toggleFocus;
-function showModal(id){$(id).classList.remove('hidden')}function hideModal(id){$(id).classList.add('hidden')}document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>hideModal(b.dataset.close));
-
-$('reportScope')?.addEventListener('change',updateReportModalSummary);
-$('previewCameraReportBtn')?.addEventListener('click',()=>openCameraReportPreview(false));
-$('printCameraReportBtn')?.addEventListener('click',()=>openCameraReportPreview(true));
-
-$('newProjectBtn').onclick=()=>showModal('newProjectModal');$('createProjectConfirmBtn').onclick=async()=>{const name=$('newProjectName').value.trim();if(!name)return alert('請輸入專案名稱');const p=newProject({name,siteType:$('newProjectType').value,address:$('newProjectAddress').value.trim(),note:$('newProjectNote').value.trim()});await dbPut(p);hideModal('newProjectModal');openProject(p.id)};
-function openSceneModal(){if(!currentProject)return;$('newSceneType').value='B1';$('newSceneName').value='B1 地下停車場';showModal('newSceneModal')}$('addSceneBtn').onclick=openSceneModal;$('emptyAddSceneBtn').onclick=openSceneModal;$('newSceneType').onchange=()=>{const t=$('newSceneType').value;$('newSceneName').value=t==='自訂'?'':`${t} ${t.startsWith('B')?'地下停車場':'場景'}`};$('createSceneConfirmBtn').onclick=async()=>{const t=$('newSceneType').value,n=$('newSceneName').value.trim()||t,s=newScene(t,n);currentProject.scenes.push(s);currentScene=s;hideModal('newSceneModal');await saveProject(false);refreshEditor()};
-$('backHomeBtn').onclick=goHome;$('saveProjectBtn').onclick=()=>saveProject();$('projectNameInput').onchange=()=>saveProject(false);$('sceneNameInput').onchange=async()=>{if(currentScene){currentScene.name=$('sceneNameInput').value.trim()||currentScene.name;await saveProject(false);refreshEditor()}};$('sceneTypeInput').onchange=async()=>{if(currentScene){currentScene.type=$('sceneTypeInput').value;await saveProject(false);refreshEditor()}};$('planOpacityInput').oninput=()=>{if(currentScene?.plan){currentScene.plan.opacity=+$('planOpacityInput').value;$('planOpacityOut').textContent=`${Math.round(currentScene.plan.opacity*100)}%`;if(floorPlane)floorPlane.material.opacity=currentScene.plan.opacity}};$('planRotationInput').onchange=async()=>{if(currentScene?.plan){currentScene.plan.rotation=+$('planRotationInput').value;await saveProject(false);buildFloor()}};
-$('deleteObstacleBtn').onclick=async()=>{const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(o&&confirm(`刪除環境物件「${o.name}」？`)){currentScene.obstacles=currentScene.obstacles.filter(x=>x.id!==o.id);selected={kind:null,id:null};await saveProject(false);renderObjects();showProperties()}};$('deleteCameraBtn').onclick=async()=>{const c=currentScene?.cameras.find(x=>x.id===selected.id);if(c&&confirm(`刪除鏡頭「${c.name}」？`)){currentScene.cameras=currentScene.cameras.filter(x=>x.id!==c.id);selected={kind:null,id:null};await saveProject(false);renderObjects();showProperties()}};$('deleteMarkBtn').onclick=async()=>{const m=currentScene?.marks.find(x=>x.id===selected.id);if(m&&confirm(`刪除標記「${m.title}」？`)){currentScene.marks=currentScene.marks.filter(x=>x.id!==m.id);selected={kind:null,id:null};await saveProject(false);renderObjects();showProperties()}};
-$('zoomInBtn').onclick=()=>zoom(.82);$('zoomOutBtn').onclick=()=>zoom(1.22);$('resetViewBtn').onclick=resetView;$('topViewBtn').onclick=topView;$('view3dBtn').onclick=resetView;$('fullscreenBtn').onclick=()=>!document.fullscreenElement?viewer.requestFullscreen?.():document.exitFullscreen?.();
-async function exportProject(){if(!currentProject)return;await saveProject(false);const blob=new Blob([JSON.stringify({format:'UTOP-CCTV3D',formatVersion:2,appVersion:APP_VERSION,project:clone(currentProject)},null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=`${currentProject.name.replace(/[\\/:*?"<>|]+/g,'-')}-${APP_VERSION}.cctv3d`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}$('exportProjectBtn').onclick=exportProject;
-$('importProjectBtn').onclick=()=>$('importProjectFile').click();$('importProjectFile').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const x=JSON.parse(await f.text()),p=x.project||x;if(!p?.name)throw new Error('格式不正確');p.id=uid('project');p.updatedAt=now();p.version=APP_VERSION;await dbPut(p);renderProjectCards();toast('專案已匯入')}catch(err){alert(`匯入失敗：${err.message}`)}e.target.value=''};$('deleteProjectBtn').onclick=async()=>{if(currentProject&&confirm(`確定刪除專案「${currentProject.name}」？`)){await dbDelete(currentProject.id);goHome()}};$('refreshProjectListBtn').onclick=renderProjectCards;if($('refreshCloudProjectsBtn'))$('refreshCloudProjectsBtn').onclick=()=>{activeApiUrl='';renderCloudProjectCards()};
-
-
-
-if($('cancelCloudLoadBtn'))$('cancelCloudLoadBtn').onclick=()=>{
-  const stage=$('cloudLoadStage')?.textContent||'';
-  if(stage.includes('失敗')||stage.includes('完成')){
-    closeCloudLoadModal();
-    $('cancelCloudLoadBtn').textContent='取消讀取';
-    return;
-  }
-  cloudLoadCancelRequested=true;
-  $('cancelCloudLoadBtn').disabled=true;
-  $('cancelCloudLoadBtn').textContent='正在取消…';
-  setTimeout(()=>{
-    $('cancelCloudLoadBtn').disabled=false;
-    $('cancelCloudLoadBtn').textContent='取消讀取';
-  },1000);
-};
-
-if($('retryCloudBtn'))$('retryCloudBtn').onclick=()=>{activeApiUrl='';renderCloudProjectCards();};
-if($('copyCloudDiagBtn'))$('copyCloudDiagBtn').onclick=async()=>{
-  const text=$('cloudDiagnosticsText')?.textContent||'';
-  try{await navigator.clipboard.writeText(text);toast('診斷資訊已複製');}
-  catch{prompt('複製診斷資訊：',text);}
-};
-
-(async function startup(){
-  await openDb();
-  await renderProjectCards();
-  applyPanels();
-  resize();
-  $('statusText').textContent=`${APP_CONFIG.appName} ${APP_VERSION}｜本機＋Google Drive 編輯版`;
-  await renderCloudProjectCards();
-})().catch(e=>{
-  console.error(e);
-  setCloudDiagnostics(`系統啟動錯誤：${e.message}`,e.stack||'');
-  alert(`系統啟動失敗：${e.message}`);
+  if(state.addMode==='calibrate'){if(!w)return;calibrationDraft.points.push(w);if(calibrationDraft.points.length===2){const [a,b]=calibrationDraft.points,d=Math.hypot(b.x-a.x,b.z-a.z);els.calibrationWorld.value=`${d.toFixed(3)} 單位`;els.calibrationStatus.textContent=`已取得兩點。圖上距離 ${d.toFixed(3)}，請輸入實際公尺數後按「套用實尺比例」。`;setAddMode(null);}renderDrafts();return;}
+  const h=hitEntity(evt);if(h){state.selected={kind:h.kind,id:h.id};const item=h.kind==='camera'?selCamera():selModule();saveWorking();refreshUI();renderObjects();if(item&&!item.fixed&&w){dragState={kind:h.kind,id:h.id,last:w};controls.enabled=false;}return;}clearSelection();
 });
+renderer.domElement.addEventListener('pointermove',evt=>{
+  const w=eventWorld(evt);if(state.addMode==='wall'&&draftWall.points.length){draftWall.mousePoint=w;renderDrafts();return;}if(!dragState||!w)return;
+  const t=dragState.kind==='camera'?currentCameras().find(x=>x.id===dragState.id):currentModules().find(x=>x.id===dragState.id);if(!t||t.fixed)return;
+  if(t.type==='wallpath'&&Array.isArray(t.points)){
+    const dx=w.x-dragState.last.x,dz=w.z-dragState.last.z;t.points=t.points.map(p=>({x:+(p.x+dx).toFixed(3),z:+(p.z+dz).toFixed(3)}));dragState.last=w;
+  }else{t.x=w.x;t.z=w.z;dragState.last=w;}
+  saveWorking();renderObjects();refreshUI();
+});
+['pointerup','pointerleave','pointercancel'].forEach(ev=>renderer.domElement.addEventListener(ev,()=>{if(dragState){dragState=null;controls.enabled=!state.addMode;}}));
+window.addEventListener('keydown',evt=>{if(state.addMode!=='wall')return;if(evt.key==='Escape'){draftWall={points:[],mousePoint:null};setAddMode(null);return;}if(evt.key==='Enter')finalizeWall(false);});
+function finalizeWall(closed=false){
+  if(draftWall.points.length<2){alert('牆體至少需要兩個點位。');return;}
+  const points=draftWall.points.map(p=>({x:+p.x.toFixed(3),z:+p.z.toFixed(3)}));
+  if(closed && points.length<3){alert('封閉牆體至少需要三個點位。');return;}
+  const base=currentModules().filter(x=>isWallModule(x)).length+1;
+  let totalWorld=0,count=closed?points.length:points.length-1;for(let i=0;i<count;i++){const a=points[i],b=points[(i+1)%points.length];totalWorld+=Math.hypot(b.x-a.x,b.z-a.z);}
+  const m={id:uid('wallpath'),type:'wallpath',name:`WALL-${currentFloorMeta()?.id||'F'}-${String(base).padStart(2,'0')}`,points,closed,height:3,thickness:.2,width:.2,length:+worldToMeters(totalWorld).toFixed(3),angle:0,fixed:false};
+  currentModules().push(m);state.selected={kind:'module',id:m.id};draftWall={points:[],mousePoint:null};saveWorking();setAddMode(null);renderObjects();refreshUI();
+}
+
+// 社區資料夾 / 樓層圖面
+els.communitySelect.onchange=()=>{state.communityId=els.communitySelect.value;state.floor=currentCommunity()?.floors[0]?.id||'';state.selected={kind:'camera',id:null};saveWorking();buildFloor();renderObjects();refreshUI();resetView();};
+els.floorSelect.onchange=()=>switchFloor(els.floorSelect.value);
+$('addCommunityBtn').onclick=()=>{const name=prompt('輸入社區 / 案場資料夾名稱：');if(!name?.trim())return;const id=uid('site');catalog.communities.push({id,name:name.trim(),floors:[]});saveCatalog();state.communityId=id;state.floor='';refreshUI();$('addFloorBtn').click();};
+$('deleteCommunityBtn').onclick=()=>{const c=currentCommunity();if(!c)return;if(c.id===DEFAULT_COMMUNITY_ID){alert('目前「樺龍潮+ 社區」為內建案場，不建議刪除。可新增其他社區資料夾。');return;}if(!confirm(`確定刪除「${c.name}」及其樓層圖面分類？`))return;catalog.communities=catalog.communities.filter(x=>x.id!==c.id);saveCatalog();state.communityId=catalog.communities[0].id;state.floor=currentCommunity()?.floors[0]?.id||'';saveWorking();buildFloor();renderObjects();refreshUI();};
+$('addFloorBtn').onclick=()=>{if(!currentCommunity()){alert('請先建立社區資料夾。');return;}$('floorFileInput').click();};
+$('floorFileInput').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;try{const name=prompt('輸入樓層名稱：',file.name.replace(/\.[^.]+$/,''));if(!name?.trim())return;els.statusText.textContent='正在處理圖面…';const plan=await fileToPlanTexture(file);const floor={id:uid('floor'),name:name.trim(),sourceType:'uploaded',texture:plan.dataUrl,widthPx:plan.widthPx,heightPx:plan.heightPx,originalFile:file.name};currentCommunity().floors.push(floor);saveCatalog();state.floor=floor.id;saveWorking();buildFloor();renderObjects();refreshUI();resetView();els.statusText.textContent=`已新增圖面：${floor.name}`;}catch(err){console.warn(err);alert('圖面加入失敗。PDF 會讀取第一頁；圖片支援 PNG/JPG/WebP。');}finally{e.target.value='';}};
+$('deleteFloorBtn').onclick=()=>{const c=currentCommunity(),f=currentFloorMeta();if(!c||!f)return;if(f.sourceType==='builtin'){alert('樺龍潮+ 社區目前的 B1 / B2 為內建圖面，不直接刪除。');return;}if(!confirm(`確定刪除圖面「${f.name}」？`))return;const key=currentKey();c.floors=c.floors.filter(x=>x.id!==f.id);delete state.cameras[key];delete state.modules[key];delete state.calibrations[key];state.floor=c.floors[0]?.id||'';saveCatalog();saveWorking();buildFloor();renderObjects();refreshUI();};
+async function fileToPlanTexture(file){
+  if(file.type.startsWith('image/')) return await imageFileToData(file);
+  if(file.type==='application/pdf'||/\.pdf$/i.test(file.name)){
+    const pdfjs=await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');pdfjs.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';const bytes=new Uint8Array(await file.arrayBuffer()),pdf=await pdfjs.getDocument({data:bytes}).promise,page=await pdf.getPage(1),vp0=page.getViewport({scale:1}),scale=Math.min(2,1800/vp0.width),vp=page.getViewport({scale}),canvas=document.createElement('canvas');canvas.width=Math.round(vp.width);canvas.height=Math.round(vp.height);await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;return{dataUrl:canvas.toDataURL('image/jpeg',.88),widthPx:canvas.width,heightPx:canvas.height};
+  }
+  throw new Error('unsupported');
+}
+function imageFileToData(file){return new Promise((resolve,reject)=>{const img=new Image(),fr=new FileReader();fr.onload=()=>img.src=fr.result;fr.onerror=reject;img.onload=()=>{const max=1800,scale=Math.min(1,max/img.width),canvas=document.createElement('canvas');canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);resolve({dataUrl:canvas.toDataURL('image/jpeg',.9),widthPx:canvas.width,heightPx:canvas.height});};img.onerror=reject;fr.readAsDataURL(file);});}
+function switchFloor(id){state.floor=id;state.selected={kind:'camera',id:null};calibrationDraft={points:[]};draftWall={points:[],mousePoint:null};saveWorking();buildFloor();renderObjects();refreshUI();resetView();}
+
+// 兩點實尺校正
+$('startCalibrationBtn').onclick=()=>{calibrationDraft={points:[]};els.calibrationWorld.value='';els.calibrationStatus.textContent='請在圖紙上依序點兩個已知實際距離的點。';setAddMode('calibrate');};
+$('applyCalibrationBtn').onclick=()=>{if(calibrationDraft.points.length!==2){alert('請先點選兩個校正點。');return;}const meters=+els.calibrationMeters.value;if(!(meters>0)){alert('請輸入正確的實際距離（公尺）。');return;}const [a,b]=calibrationDraft.points,worldDistance=Math.hypot(b.x-a.x,b.z-a.z);state.calibrations[currentKey()]={meters,worldDistance,unitsPerMeter:worldDistance/meters,pointA:a,pointB:b,updatedAt:Date.now()};saveWorking();renderObjects();refreshUI();};
+$('resetCalibrationBtn').onclick=()=>{if(!confirm('重設此樓層的實尺比例？'))return;delete state.calibrations[currentKey()];calibrationDraft={points:[]};els.calibrationMeters.value='';saveWorking();renderObjects();refreshUI();};
+
+els.listFilter.onchange=()=>{state.listFilter=els.listFilter.value;saveWorking();refreshUI();};$('planToggleBtn').onclick=()=>{state.showPlan=!state.showPlan;if(floorPlane)floorPlane.material.opacity=state.showPlan?1:.12;saveWorking();refreshUI();};$('view3dBtn').onclick=()=>{camera.position.set(0,72,86);controls.target.set(0,0,0);controls.update();};$('topViewBtn').onclick=()=>{camera.position.set(0,130,.01);controls.target.set(0,0,0);controls.update();};$('resetViewBtn').onclick=resetView;function resetView(){camera.position.set(0,72,86);controls.target.set(0,0,0);controls.update();}
+
+// 專案儲存 / 資料夾
+function getStore(){try{const raw=localStorage.getItem(STORE_KEY)||PREV_STORE_KEYS.map(k=>localStorage.getItem(k)).find(Boolean);return JSON.parse(raw)||{folders:[{id:'root',name:'我的專案'}],projects:[]};}catch{return{folders:[{id:'root',name:'我的專案'}],projects:[]};}}
+function setStore(s){localStorage.setItem(STORE_KEY,JSON.stringify(s));}function ensureStore(){const s=getStore();if(!s.folders?.length)s.folders=[{id:'root',name:'我的專案'}];if(!s.projects)s.projects=[];setStore(s);return s;}
+function renderStore(){const s=ensureStore(),cur=els.projectFolder.value&&s.folders.some(f=>f.id===els.projectFolder.value)?els.projectFolder.value:s.folders[0].id;els.projectFolder.innerHTML=s.folders.map(f=>`<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');els.projectFolder.value=cur;const list=s.projects.filter(p=>p.folderId===cur).sort((a,b)=>b.updatedAt-a.updatedAt);els.savedCount.textContent=`${list.length} 筆`;els.projectList.innerHTML=list.length?list.map(p=>`<div class="item"><div><strong>${esc(p.name)}</strong><small>${new Date(p.updatedAt).toLocaleString()}・${esc(p.version||'')}</small></div><div class="project-actions"><button data-act="load" data-id="${esc(p.id)}">讀取</button><button data-act="delete" data-id="${esc(p.id)}">刪除</button></div></div>`).join(''):'<div class="empty-list">此資料夾尚無儲存專案</div>';els.projectList.querySelectorAll('button').forEach(b=>b.onclick=e=>{e.stopPropagation();b.dataset.act==='load'?loadProject(b.dataset.id):deleteProject(b.dataset.id);});}
+els.projectFolder.onchange=renderStore;$('newFolderBtn').onclick=()=>{const name=prompt('輸入新資料夾名稱：');if(!name?.trim())return;const s=ensureStore(),f={id:uid('folder'),name:name.trim()};s.folders.push(f);setStore(s);renderStore();els.projectFolder.value=f.id;renderStore();};$('deleteFolderBtn').onclick=()=>{const s=ensureStore(),id=els.projectFolder.value;if(id==='root'){alert('「我的專案」為預設資料夾，不能刪除。');return;}const f=s.folders.find(x=>x.id===id);if(!f)return;const count=s.projects.filter(p=>p.folderId===id).length;if(!confirm(`刪除資料夾「${f.name}」？${count?`\n裡面的 ${count} 個專案也會一起刪除。`:''}`))return;s.folders=s.folders.filter(x=>x.id!==id);s.projects=s.projects.filter(p=>p.folderId!==id);setStore(s);renderStore();};
+function buildProjectPayload(){return{communityId:state.communityId,floor:state.floor,showPlan:state.showPlan,listFilter:state.listFilter,cameras:deepCopy(state.cameras),modules:deepCopy(state.modules),calibrations:deepCopy(state.calibrations),catalog:deepCopy(catalog)};}
+$('saveProjectBtn').onclick=()=>{const name=els.projectName.value.trim();if(!name){alert('請先輸入專案名稱。');return;}const s=ensureStore(),folderId=els.projectFolder.value,payload=buildProjectPayload();let p=s.projects.find(x=>x.folderId===folderId&&x.name===name);if(p){p.data=payload;p.updatedAt=Date.now();p.version=APP_VERSION;}else{s.projects.push({id:uid('project'),folderId,name,data:payload,updatedAt:Date.now(),version:APP_VERSION});}setStore(s);renderStore();els.statusText.textContent=`已儲存：${name}｜${APP_VERSION}`;};
+function applyPayload(p){if(p.catalog?.communities?.length){catalog=p.catalog;saveCatalog();}state.communityId=p.communityId||catalog.communities[0].id;state.floor=p.floor||currentCommunity()?.floors[0]?.id||'';state.showPlan=p.showPlan!==false;state.listFilter=p.listFilter||'camera';state.cameras=migrateFlatData(p.cameras);state.modules=migrateFlatData(p.modules);state.calibrations=p.calibrations||{};state.selected={kind:'camera',id:null};saveWorking();buildFloor();renderObjects();refreshUI();resetView();}
+function loadProject(id){const s=ensureStore(),p=s.projects.find(x=>x.id===id);if(!p)return;if(!confirm(`讀取「${p.name}」？目前未儲存的變更會被取代。`))return;els.projectName.value=p.name;applyPayload(p.data);els.statusText.textContent=`已讀取：${p.name}｜${p.version||APP_VERSION}`;}
+function deleteProject(id){const s=ensureStore(),p=s.projects.find(x=>x.id===id);if(!p)return;if(!confirm(`確定刪除專案「${p.name}」？`))return;s.projects=s.projects.filter(x=>x.id!==id);setStore(s);renderStore();}
+$('exportProjectBtn').onclick=async()=>{const name=els.projectName.value.trim()||`CCTV專案-${new Date().toISOString().slice(0,10)}`,payload={format:'UTOP-CCTV-3D-PROJECT',schemaVersion:4,appVersion:APP_VERSION,company:'昱拓弱電有限公司',name,exportedAt:new Date().toISOString(),data:buildProjectPayload()},blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),filename=`${name}.utop3d`;if(window.showSaveFilePicker){try{const h=await window.showSaveFilePicker({suggestedName:filename,types:[{description:'UTOP 3D Project',accept:{'application/json':['.utop3d','.json']}}]}),w=await h.createWritable();await w.write(blob);await w.close();els.statusText.textContent=`已匯出：${filename}`;return;}catch(e){if(e?.name!=='AbortError')console.warn(e);}}const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href);};$('importProjectBtn').onclick=()=>$('importProjectFile').click();$('importProjectFile').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;try{const j=JSON.parse(await file.text());applyPayload(j.data||j);els.projectName.value=j.name||file.name.replace(/\.(utop3d|json)$/i,'');els.statusText.textContent=`已匯入：${file.name}`;}catch(err){console.warn(err);alert('匯入失敗，檔案格式不正確。');}e.target.value='';};
+
+function resize(){const w=els.viewer.clientWidth,h=els.viewer.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false);}window.addEventListener('resize',resize);
+function animate(){
+  requestAnimationFrame(animate);
+  const t = performance.now() * 0.004;
+  scene.traverse(obj => {
+    if(obj.userData?.blinkType === "invincible-star") {
+      const pulse = 0.78 + 0.22 * (0.5 + 0.5 * Math.sin(t * 2.4));
+      obj.scale.setScalar(pulse);
+      obj.rotation.z = Math.sin(t * 0.9) * 0.12;
+      if(obj.material){ obj.material.emissiveIntensity = 0.7 + 0.7 * (0.5 + 0.5 * Math.sin(t * 5.2)); }
+    }
+  });
+  controls.update();
+  renderer.render(scene,camera);
+}
+buildFloor();renderObjects();refreshUI();renderStore();resize();animate();

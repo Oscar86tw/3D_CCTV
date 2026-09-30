@@ -1,211 +1,240 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>昱拓弱電｜3D CCTV 編輯器 V2.13</title>
-  <link rel="stylesheet" href="styles.css?v=2.13">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>昱拓弱電有限公司｜社區地下室 3D CCTV 規劃</title>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-<section id="projectHome" class="project-home">
-  <header class="home-head">
-    <div>
-      <div class="kicker">UTOP CCTV PLANNER</div>
-      <h1>3D CCTV 專案中心</h1>
-      <p>先建立社區專案，再建立樓層／場景、匯入平面圖，最後進行 CCTV 3D 配置。</p>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">UTOP</div>
+      <div>
+        <div class="brand-row">
+          <h1>昱拓弱電有限公司｜社區地下室 CCTV 3D 規劃</h1>
+          <span class="version-badge" id="versionBadge">V1.16</span>
+        </div>
+        <p>社區資料夾・連續牆體・可視光影・白色汽車模組・無敵星提示</p>
+      </div>
     </div>
-    <span class="version">V2.13</span>
-  </header>
-  <div class="home-actions">
-    <button id="newProjectBtn" class="primary big">＋ 建立新專案</button>
-    <button id="importProjectBtn" class="big">匯入專案檔</button><button id="refreshCloudProjectsBtn" class="big">↻ 重新整理雲端</button>
-    <input id="importProjectFile" type="file" accept=".cctv3d,.json" hidden>
-  </div>
-  <div class="section-title"><strong>最近專案｜本機</strong><button id="refreshProjectListBtn">重新整理</button></div>
-  <div id="projectCards" class="project-cards"></div>
-  <div class="section-title cloud-title"><strong>Google Drive 雲端專案</strong><span id="homeCloudStatus" class="cloud-badge offline">尚未連線</span></div>
-  <div id="cloudProjectCards" class="project-cards cloud-project-cards"><div class="empty-card">正在讀取雲端專案…</div></div>
-  <div id="cloudDiagnostics" class="cloud-diagnostics hidden">
-    <div><strong>雲端連線診斷</strong></div>
-    <div id="cloudDiagnosticsText"></div>
-    <div class="cloud-diagnostics-actions">
-      <button id="retryCloudBtn">重新測試</button>
-      <button id="copyCloudDiagBtn">複製診斷</button>
-    </div>
-  </div>
-
-</section>
-
-<section id="editorApp" class="editor-app hidden">
-  <header class="editor-topbar">
-    <div class="editor-brand">
-      <button id="backHomeBtn" class="icon">←</button>
-      <div><strong id="editorProjectName">未命名專案</strong><small id="editorSceneName">尚未建立樓層</small></div>
-    </div>
-    <nav class="main-menu">
-      <button data-menu="project">專案</button>
-      <button data-menu="plan">圖面</button>
-      <button data-menu="environment">環境</button>
-      <button data-menu="camera" class="accent">監視器</button>
-      <button data-menu="mark">標記</button>
-      <button data-menu="measure">測量</button>
-      <button data-menu="view">視角</button>
-      <button data-menu="report">報告</button>
-    </nav>
-    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.13</span></div>
+    <div class="status"><span class="dot"></span><span id="statusText">B1 模型已載入｜版本 V1.16</span></div>
   </header>
 
-  <div id="editorGrid" class="editor-grid">
-    <aside id="leftPanel" class="side-panel left-panel">
-      <div class="panel-head"><div><div class="kicker">PROJECT</div><strong>專案 / 樓層</strong></div><button id="collapseLeftBtn">◀</button></div>
-      <div class="panel-body">
-        <label>專案名稱<input id="projectNameInput" type="text"></label>
-        <div class="stats"><div><span>樓層</span><b id="sceneCount">0</b></div><div><span>鏡頭</span><b id="projectCameraCount">0</b></div><div><span>標記</span><b id="projectMarkCount">0</b></div></div>
-      </div>
-      <div class="section-row"><strong>場景 / 樓層</strong><button id="addSceneBtn" class="mini primary">＋ 新增</button></div>
-      <div id="sceneTree" class="scene-tree"></div>
-      <div class="left-actions"><button id="exportProjectBtn">匯出專案檔</button><button id="deleteProjectBtn" class="danger-ghost">刪除專案</button></div>
-    </aside>
-    <button id="expandLeftBtn" class="edge-tab left hidden">▶</button>
+  <nav class="floor-tabs" aria-label="地下室樓層">
+    <button class="floor-tab active" data-floor="B1">B1 地下一層</button>
+    <button class="floor-tab" data-floor="B2">B2 地下二層</button>
+  </nav>
 
-    <main class="viewer-wrap">
-      <div id="toolShelf" class="tool-shelf"></div>
-      <div id="viewer" class="viewer">
-        <div id="emptyScene" class="empty-state">
-          <div class="empty-icon">▣</div><h2>先建立樓層 / 場景</h2><p>例如：1MF、1F、B1、B2、B3、B4，也可以使用自訂場景。</p><button id="emptyAddSceneBtn" class="primary big">＋ 新增樓層</button>
+  <main class="workspace">
+    <section class="viewer-card">
+      <div class="toolbar">
+        <div class="tool-group">
+          <button id="view3dBtn" class="tool active">3D 視角</button>
+          <button id="topViewBtn" class="tool">俯視圖</button>
+          <button id="resetViewBtn" class="tool">重設視角</button>
+          <button id="planToggleBtn" class="tool active">平面底圖：開</button>
         </div>
-        <div id="emptyPlan" class="empty-state hidden">
-          <div id="dropZone" class="drop-zone"><div class="drop-icon">⇧</div><h3>匯入此樓層平面圖</h3><p>PDF / JPG / PNG / WebP / CAD(DXF)</p><small>DWG 建議先轉成 DXF 或 PDF</small><button id="choosePlanBtn" class="primary">選擇檔案</button><input id="planFileInput" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.dxf,.dwg" hidden></div>
+        <div class="tool-group camera-tools">
+          <button id="addCameraBtn" class="tool primary">＋ 新增鏡頭</button>
+          <button id="addWallBtn" class="tool accent">＋ 折線牆體</button>
+          <button id="addColumnBtn" class="tool accent2">＋ 新增柱子</button>
+          <button id="addCarBtn" class="tool accent">＋ 新增汽車</button>
+          <button id="addMotorBtn" class="tool accent2">＋ 新增機車</button>
+          <button id="clearModuleBtn" class="tool warn ghost">清除本層模組</button>
         </div>
-        <div class="viewer-badge"><span id="floorBadge">—</span><span id="modeBadge">3D</span></div>
-        <div class="viewer-controls"><button id="zoomInBtn">＋</button><button id="zoomOutBtn">－</button><button id="resetViewBtn">⌂</button><button id="topViewBtn">▣</button><button id="view3dBtn">◩</button><button id="fullscreenBtn">⛶</button></div>
-        <div id="modeHint" class="mode-hint hidden"></div>
       </div>
-      <div class="statusbar"><span id="statusText">尚未開啟專案</span><span id="planInfo">圖面：—</span><span id="cameraInfo">鏡頭：0</span><span id="saveInfo">尚未儲存</span></div>
-    </main>
 
-    <button id="expandRightBtn" class="edge-tab right hidden">◀</button>
-    <aside id="rightPanel" class="side-panel right-panel">
-      <div class="panel-head"><div><div class="kicker">PROPERTIES</div><strong id="propertyTitle">場景屬性</strong></div><button id="collapseRightBtn">▶</button></div>
-      <div id="sceneProperties" class="property-pane">
-        <label>場景名稱<input id="sceneNameInput" type="text"></label>
-        <label>樓層類型<select id="sceneTypeInput"><option>RF</option><option>R1F</option><option>1MF</option><option>1F</option><option>2F</option><option>3F</option><option>B1</option><option>B2</option><option>B3</option><option>B4</option><option>B5</option><option>B6</option><option>自訂</option></select></label>
-        <div class="divider">圖面</div>
-        <div class="btn-row"><button id="replacePlanBtn">更換圖面</button><button id="removePlanBtn" class="danger-ghost">移除</button></div>
-        <label>圖面透明度<input id="planOpacityInput" type="range" min="0.15" max="1" step="0.05" value="1"><output id="planOpacityOut">100%</output></label>
-        <label>圖面旋轉<select id="planRotationInput"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
-        <div class="divider">場景統計</div>
-        <div class="stats"><div><span>鏡頭</span><b id="sceneCameraCount">0</b></div><div><span>標記</span><b id="sceneMarkCount">0</b></div><div><span>遮擋物</span><b id="sceneObstacleCount">0</b></div></div>
+      <div id="viewer" class="viewer" aria-label="3D 地下室檢視區">
+        <div id="addHint" class="add-hint hidden">請在圖面上操作</div>
+        <div class="compass"><span>N</span><b>↑</b></div>
+        <div class="floor-chip" id="floorChip">B1</div>
       </div>
-      <div id="cameraProperties" class="property-pane hidden">
-        <div id="cameraLegend" class="camera-legend"><span><i class="dot red"></i>原建置 <b id="camCountExisting">0</b></span><span><i class="dot yellow"></i>增設 <b id="camCountNew">0</b></span><span><i class="dot orange"></i>故障 <b id="camCountFault">0</b></span></div>
-        <label>鏡頭名稱<input id="camName" type="text"></label>
-        <div class="two"><label>狀態<select id="camStatus"><option value="existing">原建置</option><option value="new">增設</option><option value="fault">故障</option></select></label><label>焦段<select id="camLens"><option value="2.8">2.8 mm</option><option value="3.6">3.6 mm</option><option value="4">4 mm</option><option value="6">6 mm</option><option value="8">8 mm</option></select></label></div>
-        <label>方向<input id="camYaw" type="range" min="0" max="359"><output id="camYawOut">0°</output></label>
-        <label>有效距離<input id="camRange" type="range" min="3" max="40"><output id="camRangeOut">14m</output></label>
-        <label>安裝高度（公尺）<input id="camHeight" type="number" min="1" max="10" step="0.1"></label>
-        <label class="check"><input id="camFixed" type="checkbox">固定位置</label>
-        <label class="check"><input id="camShowFov" type="checkbox" checked>顯示視野</label>
-        <label>備註<textarea id="camNote" rows="4"></textarea></label>
-        <button id="deleteCameraBtn" class="danger">刪除鏡頭</button>
+
+      <div class="viewer-help">
+        <span>左鍵旋轉 / 選取 / 拖曳移動</span>
+        <span>右鍵平移</span>
+        <span>滾輪縮放</span>
+        <span>牆體：連續點位；點回起點自動完成，Enter 可結束開放牆，Esc 取消</span>
+        <span>視角：顯示實際可見光影範圍，牆柱與車機車遮擋不穿透</span><span>圖紙比例：X/Z 同比例映射＋兩點實尺校正</span>
+        <span>版本：<b id="footerVersionInline">V1.16</b></span>
       </div>
-      <div id="obstacleProperties" class="property-pane hidden">
-        <label>環境物件名稱<input id="obsName" type="text"></label>
-        <div class="two"><label>類型<select id="obsType"><option value="wall">單段牆體</option><option value="wallpath">連續牆體</option><option value="column">柱子</option><option value="car">汽車</option><option value="motorcycle">機車</option><option value="parking">停車格</option></select></label><label>角度<input id="obsAngle" type="number" min="0" max="359" step="1"></label></div>
-        <label>長度（m）<input id="obsLength" type="number" min="0.5" max="50" step="0.1"></label>
-        <div class="two"><label>寬度（m）<input id="obsWidth" type="number" min="0.2" max="10" step="0.1"></label><label>深度（m）<input id="obsDepth" type="number" min="0.2" max="15" step="0.1"></label></div>
-        <div class="two"><label>高度（m）<input id="obsHeight" type="number" min="0.2" max="10" step="0.1"></label><label>厚度（m）<input id="obsThickness" type="number" min="0.05" max="2" step="0.05"></label></div>
-        <label class="check"><input id="obsOccludes" type="checkbox" checked>遮擋監視器視野</label>
-        <label class="check"><input id="obsFixed" type="checkbox">固定位置</label>
-        <label class="check"><input id="obsHidden" type="checkbox">隱藏</label>
-        <button id="deleteObstacleBtn" class="danger">刪除環境物件</button>
-      </div>
-      <div id="markProperties" class="property-pane hidden">
-        <label>標記名稱<input id="markTitle" type="text"></label>
-        <label>類型<select id="markType"><option value="blind">死角</option><option value="note">說明</option><option value="new">增設位置</option><option value="issue">問題</option></select></label>
-        <label>內容<textarea id="markText" rows="6"></textarea></label>
-        <label class="check"><input id="markPublic" type="checkbox" checked>使用者介面顯示</label>
-        <button id="deleteMarkBtn" class="danger">刪除標記</button>
-      </div>
+    </section>
+
+    <aside class="side-panel">
+      <section class="panel-section">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">CURRENT FLOOR</p>
+            <h2 id="floorTitle">B1 地下一層</h2>
+          </div>
+          <span class="badge">互動模型</span>
+        </div>
+        <p class="muted">目前 B1、B2 圖面歸類在「樺龍潮+ 社區」。本版延續黃色增設鏡頭與 7 公尺高閃爍無敵星提示，並把汽車模組主色由紅色調整為白色，讓圖面辨識更乾淨、不會過度搶眼。汽車與機車仍可設定是否遮擋鏡頭視角。</p>
+      </section>
+
+      <section class="panel-section stats-grid">
+        <div class="stat"><b id="cameraCount">0</b><span>本層鏡頭</span></div>
+        <div class="stat"><b id="moduleCount">0</b><span>本層模組</span></div>
+        <div class="stat"><b id="selectedFov">—</b><span>選取 FOV</span></div>
+        <div class="stat"><b id="selectedType">—</b><span>選取項目</span></div>
+      </section>
+
+      <section class="panel-section" id="siteManager">
+        <div class="section-heading row-between">
+          <span>社區 / 樓層圖面</span>
+          <span class="mini-badge">案場管理</span>
+        </div>
+        <div class="two-col">
+          <label>社區資料夾<select id="communitySelect"></select></label>
+          <label>樓層圖面<select id="floorSelect"></select></label>
+        </div>
+        <div class="drawer-actions">
+          <button id="addCommunityBtn" class="mini-btn accent2">＋ 新增社區</button>
+          <button id="deleteCommunityBtn" class="mini-btn">刪除社區</button>
+          <button id="addFloorBtn" class="mini-btn accent">＋ 新增圖面</button>
+          <button id="deleteFloorBtn" class="mini-btn">刪除圖面</button>
+          <input id="floorFileInput" type="file" accept=".pdf,image/*" hidden />
+        </div>
+        <div id="floorPlanInfo" class="field-note">樺龍潮+ 社區 / B1</div>
+
+        <div class="section-heading row-between top-gap">
+          <span>兩點實尺校正</span>
+          <span id="scaleBadge" class="mini-badge">未校正</span>
+        </div>
+        <div class="drawer-actions">
+          <button id="startCalibrationBtn" class="mini-btn accent">① 點兩個已知距離點</button>
+          <button id="resetCalibrationBtn" class="mini-btn">重設比例</button>
+        </div>
+        <div class="two-col">
+          <label>實際距離（公尺）
+            <input id="calibrationMeters" type="number" min="0.1" step="0.1" placeholder="例：5.0" />
+          </label>
+          <label>圖上兩點距離
+            <input id="calibrationWorld" type="text" disabled placeholder="尚未取點" />
+          </label>
+        </div>
+        <div class="drawer-actions">
+          <button id="applyCalibrationBtn" class="mini-btn accent2">② 套用實尺比例</button>
+        </div>
+        <div id="calibrationStatus" class="field-note">尚未校正。先在圖紙上選兩個有已知實際距離的點位。</div>
+      </section>
+
+      <section class="panel-section" id="projectStorage">
+        <div class="section-heading row-between">
+          <span>專案儲存</span>
+          <span class="mini-badge">資料夾管理</span>
+        </div>
+        <div class="two-col">
+          <label>儲存位置<select id="projectFolder"></select></label>
+          <label>專案名稱<input id="projectName" type="text" placeholder="例：A社區 CCTV 改善案" /></label>
+        </div>
+        <div class="drawer-actions">
+          <button id="newFolderBtn" class="mini-btn accent2">＋ 新增資料夾</button>
+          <button id="deleteFolderBtn" class="mini-btn">刪除資料夾</button>
+          <button id="saveProjectBtn" class="mini-btn accent">儲存專案</button>
+        </div>
+        <div class="drawer-actions file-actions">
+          <button id="exportProjectBtn" class="mini-btn accent">匯出專案檔</button>
+          <button id="importProjectBtn" class="mini-btn accent2">匯入專案檔</button>
+          <input id="importProjectFile" type="file" accept=".json,.utop3d" hidden />
+        </div>
+        <div class="field-note">可建立資料夾、選擇儲存位置、儲存 / 讀取 / 刪除專案，並支援匯出與匯入。</div>
+        <div class="section-heading row-between top-gap">
+          <span>已儲存專案</span>
+          <span id="savedCount" class="mini-badge">0 筆</span>
+        </div>
+        <div id="projectList" class="item-list"><div class="empty-list">尚無儲存專案</div></div>
+      </section>
+
+      <section class="panel-section" id="moduleDrawer">
+        <div class="section-heading row-between"><span>模組抽屜</span><span class="mini-badge">牆體／柱子</span></div>
+        <div class="drawer-actions">
+          <button id="drawerAddWallBtn" class="mini-btn accent">折線牆體</button>
+          <button id="drawerAddColumnBtn" class="mini-btn accent2">新增柱子</button>
+          <button id="drawerAddCarBtn" class="mini-btn accent">新增汽車</button>
+          <button id="drawerAddMotorBtn" class="mini-btn accent2">新增機車</button>
+        </div>
+        <div id="noModule" class="empty-state">尚未選取模組。<br>可直接拖曳移動；若勾選固定，則不會再被拖曳。汽車與機車可另設定是否遮擋鏡頭視角。黃色「增設」鏡頭會在上方顯示 7m 無敵星提示。</div>
+        <div id="moduleForm" class="module-form hidden">
+          <label>模組名稱<input id="modName" type="text" /></label>
+          <label>模組類型<input id="modType" type="text" disabled /></label>
+          <div class="two-col">
+            <label>長度<input id="modLength" type="number" min="0.2" step="0.1" /></label>
+            <label id="modWidthWrap">寬度<input id="modWidth" type="number" min="0.2" step="0.1" /></label>
+          </div>
+          <div class="two-col">
+            <label>高度<input id="modHeight" type="number" min="0.2" step="0.1" /></label>
+            <label id="modThicknessWrap">厚度<input id="modThickness" type="number" min="0.05" step="0.05" /></label>
+          </div>
+          <label>角度<input id="modAngle" type="range" min="0" max="359" value="0" /><output id="modAngleOut">0°</output></label>
+          <label class="checkbox-row"><input id="modFixed" type="checkbox" /> 固定位置（勾選後不可拖曳移動）</label>
+          <label id="modOccludeWrap" class="checkbox-row hidden"><input id="modOccludes" type="checkbox" checked /> 遮擋鏡頭視角（取消勾選＝鏡頭可越過車輛看見後方）</label>
+          <div class="form-actions"><button id="deleteModuleBtn" class="danger-button">刪除此模組</button></div>
+        </div>
+      </section>
+
+      <section class="panel-section" id="cameraEditor">
+        <div class="section-heading row-between"><span>鏡頭設定</span><span class="mini-badge">焦距 / 顏色</span></div>
+        <div id="noCamera" class="empty-state">尚未選取鏡頭。<br>鏡頭可直接拖曳移動；固定後不可移動。</div>
+        <div id="cameraForm" class="camera-form hidden">
+          <label>鏡頭名稱<input id="camName" type="text" /></label>
+          <div class="two-col">
+            <label>鏡頭焦距
+              <select id="camLens">
+                <option value="2.8">2.8mm</option>
+                <option value="3.6">3.6mm</option>
+                <option value="4" selected>4mm（預設）</option>
+                <option value="6">6mm</option>
+                <option value="8">8mm</option>
+              </select>
+            </label>
+            <label>建議水平視角<input id="camLensFov" type="text" disabled /></label>
+          </div>
+          <div class="field-note">焦距越小，視角越廣；焦距越大，視角越窄。視角會以單色光影顯示鏡頭真正看得到的畫面範圍；牆、柱、汽車與機車都會造成遮擋。黃色「增設」鏡頭會在 7m 高度顯示黃色無敵星提示，並會閃爍。</div>
+          <div class="two-col">
+            <label>顏色分類<select id="camColor"></select></label>
+            <label>分類名稱<input id="camColorLabel" type="text" placeholder="例：原建置 / 增設 / 故障" /></label>
+          </div>
+          <label class="checkbox-row"><input id="camFixed" type="checkbox" /> 固定位置（勾選後不可拖曳移動）</label>
+          <div class="two-col">
+            <label>水平視角 FOV<input id="camFov" type="range" min="30" max="120" value="76" /><output id="camFovOut">76°</output></label>
+            <label>監看距離<input id="camRange" type="range" min="6" max="50" value="18" /><output id="camRangeOut">18m</output></label>
+          </div>
+          <label>方向<input id="camYaw" type="range" min="0" max="359" value="0" /><output id="camYawOut">0°</output></label>
+          <label>安裝備註<textarea id="camNote" rows="3" placeholder="例：柱後方死角、車道轉角、電梯口"></textarea></label>
+          <div class="form-actions"><button id="deleteCamBtn" class="danger-button">刪除此鏡頭</button></div>
+        </div>
+      </section>
+
+      <section class="panel-section grow small-gap">
+        <div class="section-heading row-between">
+          <span>項目清單</span>
+          <select id="listFilter" class="inline-select">
+            <option value="camera" selected>鏡頭</option>
+            <option value="wall">牆體</option>
+            <option value="column">柱子</option>
+            <option value="car">汽車</option>
+            <option value="motorcycle">機車</option>
+            <option value="all">全部</option>
+          </select>
+        </div>
+        <div id="cameraLegend" class="color-legend"></div>
+        <div id="itemList" class="item-list"><div class="empty-list">尚無項目</div></div>
+      </section>
     </aside>
-  </div>
-</section>
+  </main>
 
-<div id="newProjectModal" class="modal hidden"><div class="modal-card"><div class="modal-head"><div><div class="kicker">NEW PROJECT</div><h3>建立新專案</h3></div><button data-close="newProjectModal">×</button></div><label>專案名稱<input id="newProjectName" type="text" placeholder="例：樺龍潮+ 社區"></label><label>案場類型<select id="newProjectType"><option>社區住宅</option><option>商辦</option><option>工廠</option><option>停車場</option><option>其他</option></select></label><label>地址（選填）<input id="newProjectAddress" type="text"></label><label>備註（選填）<textarea id="newProjectNote" rows="4"></textarea></label><div class="modal-actions"><button data-close="newProjectModal">取消</button><button id="createProjectConfirmBtn" class="primary">建立專案</button></div></div></div>
-<div id="newSceneModal" class="modal hidden"><div class="modal-card small-card"><div class="modal-head"><div><div class="kicker">NEW SCENE</div><h3>新增樓層 / 場景</h3></div><button data-close="newSceneModal">×</button></div><label>樓層<select id="newSceneType"><option>RF</option><option>R1F</option><option>1MF</option><option>1F</option><option>2F</option><option>3F</option><option>B1</option><option>B2</option><option>B3</option><option>B4</option><option>B5</option><option>B6</option><option>自訂</option></select></label><label>場景名稱<input id="newSceneName" type="text" placeholder="例：B1 地下停車場"></label><div class="modal-actions"><button data-close="newSceneModal">取消</button><button id="createSceneConfirmBtn" class="primary">建立</button></div></div></div>
+  <footer class="footer-note">V1.16｜昱拓弱電有限公司｜鏡頭工業盒式模型＋單一扇形視野｜連續牆體自動封閉｜藍色鏡頭 4m 提示氣球｜社區 / 樓層管理</footer>
 
-
-<div id="cameraReportModal" class="modal hidden">
-  <div class="modal-card report-modal-card">
-    <div class="modal-head">
-      <div>
-        <div class="kicker">CCTV CONFIGURATION REPORT</div>
-        <h3>輸出鏡頭配置報告</h3>
-      </div>
-      <button data-close="cameraReportModal">×</button>
-    </div>
-
-    <div class="report-options">
-      <label>報告範圍
-        <select id="reportScope">
-          <option value="current">目前樓層</option>
-          <option value="all">全部樓層</option>
-        </select>
-      </label>
-      <label class="check"><input id="reportIncludeSnapshot" type="checkbox" checked>加入目前 3D 畫面截圖</label>
-      <label class="check"><input id="reportIncludeNotes" type="checkbox" checked>顯示鏡頭備註</label>
-      <label class="check"><input id="reportOnlyPublicMarks" type="checkbox" checked>標記只列「使用者介面顯示」</label>
-    </div>
-
-    <div class="report-preview-info">
-      <div><span>專案</span><b id="reportProjectName">—</b></div>
-      <div><span>目前樓層</span><b id="reportFloorName">—</b></div>
-      <div><span>鏡頭</span><b id="reportCameraCount">0</b></div>
-      <div><span>增設</span><b id="reportNewCameraCount">0</b></div>
-    </div>
-
-    <div class="modal-actions">
-      <button data-close="cameraReportModal">取消</button>
-      <button id="previewCameraReportBtn">預覽報告</button>
-      <button id="printCameraReportBtn" class="primary">輸出 / 列印 PDF</button>
-    </div>
-  </div>
-</div>
-
-<div id="cloudLoadModal" class="cloud-load-modal hidden" role="dialog" aria-modal="true" aria-labelledby="cloudLoadTitle">
-  <div class="cloud-load-card">
-    <div class="cloud-load-head">
-      <div>
-        <div class="kicker">GOOGLE DRIVE</div>
-        <h3 id="cloudLoadTitle">正在開啟雲端專案</h3>
-      </div>
-      <span id="cloudLoadPercent" class="cloud-load-percent">0%</span>
-    </div>
-
-    <div class="cloud-load-project" id="cloudLoadProjectName">—</div>
-
-    <div class="cloud-progress-track">
-      <div id="cloudProgressBar" class="cloud-progress-bar" style="width:0%"></div>
-    </div>
-
-    <div id="cloudLoadStage" class="cloud-load-stage">準備讀取…</div>
-
-    <div class="cloud-load-details">
-      <div><span>目前步驟</span><b id="cloudLoadStep">1 / 6</b></div>
-      <div><span>讀取資料</span><b id="cloudLoadBytes">0 KB</b></div>
-      <div><span>已用時間</span><b id="cloudLoadElapsed">0 秒</b></div>
-    </div>
-
-    <div id="cloudLoadSubtext" class="cloud-load-subtext">正在準備 Google Drive 專案資料。</div>
-
-    <div class="cloud-load-actions">
-      <button id="cancelCloudLoadBtn">取消讀取</button>
-    </div>
-  </div>
-</div>
-
-<div id="toast" class="toast hidden"></div>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
-<script type="module" src="app.js?v=2.13"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
