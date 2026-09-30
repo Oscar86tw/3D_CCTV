@@ -1,4 +1,4 @@
-# 3D CCTV 編輯器 V2.6
+# 3D CCTV 編輯器 V2.7
 
 正式環境：
 - GitHub Repository: https://github.com/Oscar86tw/3D_CCTV
@@ -7,13 +7,13 @@
 - Apps Script: https://script.google.com/macros/s/AKfycbzXV-NHwpmjzscmfBbcnu0gK2KSsEm3ANS-dW9wZu85dFbKLQaQRInNiVwwOF9NxjtWiQ/exec
 - Google Drive: https://drive.google.com/drive/folders/14XSbHur93Q_RmNas8gcfBsRNVGO_OhPR?usp=drive_link
 
-V2.6 新增 Google Drive 雲端專案儲存與開啟。
+V2.7 新增 Google Drive 雲端專案儲存與開啟。
 雲端方法：JSONP 讀取 + 隱藏 Form POST + JSONP 輪詢確認 + Drive `.cctv3d` 實體檔。
 
 工作流程：建立專案 → 建立樓層 → 匯入圖面 → 配置 CCTV → 標記 → 按「儲存」同步本機與 Google Drive。
 
-## V2.6 雲端連線修正
-- HTML / CSS / app.js / config.js 全部加入版本 cache-busting，避免 GitHub Pages 顯示 V2.6 HTML 卻仍執行瀏覽器快取的舊 app.js。
+## V2.7 雲端連線修正
+- HTML / CSS / app.js / config.js 全部加入版本 cache-busting，避免 GitHub Pages 顯示 V2.7 HTML 卻仍執行瀏覽器快取的舊 app.js。
 - 首次連線直接使用 config.js 已指定的正式 Apps Script /exec，不再先等待 Google Sheets B1。
 - B1 保留作為備援來源。
 - 首頁雲端區加入明確的「連線中 / 已連線 / 連線失敗」狀態。
@@ -21,7 +21,7 @@ V2.6 新增 Google Drive 雲端專案儲存與開啟。
 - 新增「重新測試」與「複製診斷」。
 - Apps Script API 版本升至 2.2，新增 diagnostics action。
 
-## V2.6｜設定表 B2 修正
+## V2.7｜設定表 B2 修正
 正式設定改為：
 - B1：EXCEL
 - B2：APPS SCRIPT /exec
@@ -33,7 +33,7 @@ https://script.google.com/macros/s/AKfycbwEbJjX96-JAdKmlUW5TBDpuQ_Aocqt19SYbg4bb
 
 重要：`setup()` 不再覆蓋 B1，避免把 EXCEL 連結改掉。
 
-## V2.6｜雲端專案開啟進度顯示
+## V2.7｜雲端專案開啟進度顯示
 - 點「開啟專案」後會顯示中央進度視窗，不再只有按鈕沒有反應。
 - 顯示 6 個步驟：
   1. 確認 Apps Script 連線
@@ -47,7 +47,7 @@ https://script.google.com/macros/s/AKfycbwEbJjX96-JAdKmlUW5TBDpuQ_Aocqt19SYbg4bb
 - 發生錯誤時視窗會停留在錯誤步驟，不會只跳一個看不到過程的 alert。
 - 分段大小由 100KB 提高到約 400KB，減少 Apps Script 往返次數，加速大型平面圖專案。
 
-## V2.6｜環境 + 監視器
+## V2.7｜環境 + 監視器
 - 環境：牆體、柱子、汽車、機車、停車格。
 - 環境物件可拖曳、旋轉、固定、隱藏，並可設定是否遮擋監視器。
 - 監視器：2.8 / 3.6 / 4 / 6 / 8mm、方向、距離、高度、狀態、固定、視野、備註。
@@ -55,7 +55,7 @@ https://script.google.com/macros/s/AKfycbwEbJjX96-JAdKmlUW5TBDpuQ_Aocqt19SYbg4bb
 - 原建置 / 增設 / 故障狀態圖例與數量。
 - FOV 依牆體、柱子、汽車、機車做 2D 遮擋裁切。
 
-## V2.6｜連續牆體 + 舊版監視器外觀
+## V2.7｜連續牆體 + 舊版監視器外觀
 ### 牆體
 - 恢復舊版連續牆體繪製方式。
 - 點「＋牆體」後：
@@ -76,3 +76,22 @@ https://script.google.com/macros/s/AKfycbwEbJjX96-JAdKmlUW5TBDpuQ_Aocqt19SYbg4bb
   - 支柱
   - 圓形底座
 - 保留 V2.5 的焦段、方向、距離、狀態分類與遮擋 FOV。
+
+## V2.7｜增設鏡頭星星 + 鏡頭配置報告
+### 增設鏡頭提示
+- 狀態為「增設」的鏡頭，上方 7m 顯示黃色五角星。
+- 星星永遠朝向觀看鏡頭，避免轉視角後看不到。
+- 星星會閃爍、呼吸放大縮小，沿用之前的「無敵星星」提示概念。
+- 星星下方有黃色虛線，指向該新增鏡頭。
+- 原建置 / 故障鏡頭不顯示星星。
+
+### 輸出鏡頭配置報告
+- 「報告 → 輸出鏡頭配置報告」正式啟用。
+- 可選：
+  - 目前樓層
+  - 全部樓層
+- 可加入目前 3D 畫面截圖。
+- 報告統計：總鏡頭、原建置、增設、故障。
+- 每層列出鏡頭名稱、狀態、焦段、有效距離、方向、安裝高度、固定、備註。
+- 可列出標記 / 說明。
+- 以瀏覽器列印功能直接「另存為 PDF」。

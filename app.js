@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.6';
+import { APP_CONFIG } from './config.js?v=2.7';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v26-api-url';
+const API_CACHE_KEY='utop-cctv-v27-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -18,6 +18,7 @@ const FLOORS=['RF','R1F','1MF','1F','2F','3F','B1','B2','B3','B4','B5','B6','自
 let db,currentProject=null,currentScene=null,selected={kind:null,id:null},mode='select',drag=null,floorPlane=null;
 let uiState=loadUIState();
 let draftWall={points:[],mousePoint:null};
+let newCameraStars=[];
 
 let cloudLoadCancelRequested=false;
 let cloudLoadStartedAt=0;
@@ -331,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.6'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.6`);
+    if(apiVersion!=='2.7'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.7`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -492,7 +493,23 @@ const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2(),dragPlane=new TH
 
 function clearGroup(g){while(g.children.length){const o=g.children[0];g.remove(o);o.traverse?.(n=>{n.geometry?.dispose?.();if(n.material){(Array.isArray(n.material)?n.material:[n.material]).forEach(m=>{m.map?.dispose?.();m.dispose?.()})}})}}
 function resize(){const w=Math.max(1,viewer.clientWidth),h=Math.max(1,viewer.clientHeight);camera3d.aspect=w/h;camera3d.updateProjectionMatrix();renderer.setSize(w,h,false)}
-window.addEventListener('resize',resize);(function loop(){requestAnimationFrame(loop);controls.update();renderer.render(scene3d,camera3d)})();
+window.addEventListener('resize',resize);(function loop(){
+  requestAnimationFrame(loop);
+  controls.update();
+
+  const t=performance.now()/1000;
+  newCameraStars.forEach(star=>{
+    // 星星永遠朝向目前鏡頭，並以「無敵星星」方式閃爍 / 呼吸。
+    star.quaternion.copy(camera3d.quaternion);
+    const pulse=1+Math.sin(t*5.2)*.16;
+    star.scale.setScalar(pulse);
+    star.visible=Math.sin(t*9)>-.65;
+    const s=star.children?.[0];
+    if(s?.material)s.material.opacity=.78+(Math.sin(t*6.5)+1)*.11;
+  });
+
+  renderer.render(scene3d,camera3d);
+})();
 function resetView(){camera3d.position.set(0,60,72);controls.target.set(0,0,0);controls.update();$('modeBadge').textContent='3D'}
 function topView(){camera3d.position.set(0,120,.01);controls.target.set(0,0,0);controls.update();$('modeBadge').textContent='俯視'}
 function zoom(f){const d=camera3d.position.clone().sub(controls.target).multiplyScalar(f);camera3d.position.copy(controls.target.clone().add(d));controls.update()}
@@ -773,6 +790,74 @@ function obstacleSegments(){
   return out;
 }
 function cameraCoverage(c){const pre=LENS[String(c.lens)]||LENS['2.8'],range=Number(c.range||pre.range),fov=THREE.MathUtils.degToRad(pre.fov),yaw=THREE.MathUtils.degToRad(Number(c.yaw||0)),segs=obstacleSegments(),shape=new THREE.Shape();shape.moveTo(0,0);const samples=40;for(let i=0;i<=samples;i++){const off=-fov/2+fov*i/samples,ang=yaw+off,dir={x:Math.sin(ang),z:-Math.cos(ang)};let d=range;for(const [a,b] of segs){const t=raySeg({x:c.x||0,z:c.z||0},dir,a,b);if(t!==null&&t<d)d=t}shape.lineTo(dir.x*d,dir.z*d)}shape.closePath();const mesh=new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:COLORS[c.status]||COLORS.existing,transparent:true,opacity:.18,side:THREE.DoubleSide,depthWrite:false}));mesh.position.set(c.x||0,.055,c.z||0);mesh.userData={kind:'camera-coverage',id:c.id};return mesh}
+
+function createFivePointStarShape(outer=0.9,inner=0.4){
+  const shape=new THREE.Shape();
+  for(let i=0;i<10;i++){
+    const r=i%2===0?outer:inner;
+    const a=-Math.PI/2+i*Math.PI/5;
+    const x=Math.cos(a)*r,y=Math.sin(a)*r;
+    if(i===0)shape.moveTo(x,y);else shape.lineTo(x,y);
+  }
+  shape.closePath();
+  return shape;
+}
+
+function makeNewCameraStar(c){
+  const g=new THREE.Group();
+  g.position.set(c.x||0,7,c.z||0);
+  g.userData={kind:'new-camera-star',cameraId:c.id,baseScale:1};
+
+  const star=new THREE.Mesh(
+    new THREE.ShapeGeometry(createFivePointStarShape(1.0,.43)),
+    new THREE.MeshBasicMaterial({
+      color:0xffe600,
+      transparent:true,
+      opacity:.95,
+      side:THREE.DoubleSide,
+      depthTest:false
+    })
+  );
+  star.renderOrder=20;
+  star.userData={kind:'new-camera-star',cameraId:c.id};
+  g.add(star);
+
+  const glow=new THREE.Mesh(
+    new THREE.CircleGeometry(1.18,32),
+    new THREE.MeshBasicMaterial({
+      color:0xffcc00,
+      transparent:true,
+      opacity:.14,
+      side:THREE.DoubleSide,
+      depthTest:false
+    })
+  );
+  glow.position.z=-.02;
+  glow.renderOrder=19;
+  g.add(glow);
+
+  const stem=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0,-4.15,0),
+      new THREE.Vector3(0,-.95,0)
+    ]),
+    new THREE.LineDashedMaterial({
+      color:0xffe600,
+      transparent:true,
+      opacity:.48,
+      dashSize:.28,
+      gapSize:.18,
+      depthTest:false
+    })
+  );
+  stem.computeLineDistances();
+  stem.renderOrder=18;
+  g.add(stem);
+
+  newCameraStars.push(g);
+  return g;
+}
+
 function makeCamera(c){
   const isSelected=selected.kind==='camera'&&selected.id===c.id;
   const color=COLORS[c.status]||COLORS.existing;
@@ -842,7 +927,23 @@ function makeCamera(c){
   return g;
 }
 function makeMark(m){const g=new THREE.Group();g.position.set(m.x||0,.2,m.z||0);g.userData={kind:'mark',id:m.id};const a=new THREE.Mesh(new THREE.CylinderGeometry(.6,.6,.15,24),new THREE.MeshStandardMaterial({color:0xfacc15}));a.userData={kind:'mark',id:m.id};g.add(a);const s=new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,2.6,12),new THREE.MeshStandardMaterial({color:0xfacc15}));s.position.y=1.35;s.userData={kind:'mark',id:m.id};g.add(s);return g}
-function renderObjects(){clearGroup(environmentRoot);clearGroup(cameraRoot);clearGroup(markRoot);if(!currentScene){renderWallDraft();return}currentScene.obstacles=currentScene.obstacles||[];currentScene.cameras=currentScene.cameras||[];currentScene.marks=currentScene.marks||[];currentScene.obstacles.forEach(o=>environmentRoot.add(makeObstacle(o)));currentScene.cameras.forEach(c=>{cameraRoot.add(makeCamera(c));if(c.showFov!==false)cameraRoot.add(cameraCoverage(c))});currentScene.marks.forEach(m=>markRoot.add(makeMark(m)));refreshCounts();renderWallDraft()}
+function renderObjects(){
+  clearGroup(environmentRoot);clearGroup(cameraRoot);clearGroup(markRoot);
+  newCameraStars=[];
+  if(!currentScene){renderWallDraft();return}
+  currentScene.obstacles=currentScene.obstacles||[];
+  currentScene.cameras=currentScene.cameras||[];
+  currentScene.marks=currentScene.marks||[];
+  currentScene.obstacles.forEach(o=>environmentRoot.add(makeObstacle(o)));
+  currentScene.cameras.forEach(c=>{
+    cameraRoot.add(makeCamera(c));
+    if(c.showFov!==false)cameraRoot.add(cameraCoverage(c));
+    if(c.status==='new')cameraRoot.add(makeNewCameraStar(c));
+  });
+  currentScene.marks.forEach(m=>markRoot.add(makeMark(m)));
+  refreshCounts();
+  renderWallDraft();
+}
 function buildScene(){buildFloor();renderObjects();resize();if(currentScene?.plan)resetView()}
 function planePoint(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);const p=new THREE.Vector3();return raycaster.ray.intersectPlane(dragPlane,p)?p:null}
 function hit(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);for(const h of raycaster.intersectObjects([environmentRoot,cameraRoot,markRoot],true)){let o=h.object;while(o&&!o.userData?.kind)o=o.parent;if(o?.userData?.kind&&o.userData.kind!=='camera-coverage')return o.userData}return null}
@@ -974,13 +1075,194 @@ async function dxfToData(file){const s=parseDxf(await file.text());if(!s.length)
 async function importPlan(file){if(!currentScene)return;if(/\.dwg$/i.test(file.name)){alert('DWG 目前請先轉成 DXF 或 PDF。');return}let r;if(file.type.startsWith('image/'))r=await imageToData(file);else if(file.type==='application/pdf'||/\.pdf$/i.test(file.name))r=await pdfToData(file);else if(/\.dxf$/i.test(file.name))r=await dxfToData(file);else throw new Error('不支援此格式');currentScene.plan={fileName:file.name,dataUrl:r.dataUrl,width:r.width,height:r.height,opacity:1,rotation:0};await saveProject(false);refreshEditor();toast('圖面已匯入')}
 $('planFileInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{await importPlan(f)}catch(err){alert(err.message)}e.target.value=''};$('choosePlanBtn').onclick=()=>$('planFileInput').click();$('replacePlanBtn').onclick=()=>$('planFileInput').click();$('removePlanBtn').onclick=async()=>{if(!currentScene?.plan)return;if(confirm('移除此樓層圖面？')){currentScene.plan=null;await saveProject(false);refreshEditor()}};const dz=$('dropZone');['dragenter','dragover'].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.add('dragover')}));['dragleave','drop'].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.remove('dragover')}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files?.[0];if(f)importPlan(f)});
 
-function renderTools(menu){const data={project:[['儲存專案','save'],['匯出專案','export'],['新增樓層','new-scene']],plan:[['匯入 / 更換圖面','plan'],['透明度 100%','op1'],['透明度 50%','op5']],environment:[['＋ 牆體','add-wall'],['＋ 柱子','add-column'],['＋ 汽車','add-car'],['＋ 機車','add-motorcycle'],['＋ 停車格','add-parking']],camera:[['＋ 新增監視器','add-camera'],['顯示全部視野','show'],['隱藏全部視野','hide'],['全部設為原建置','cams-existing'],['全部設為增設','cams-new']],mark:[['＋ 新增標記','add-mark']],measure:[['兩點實尺校正（下一階段）','todo']],view:[['3D','3d'],['俯視','top'],['重設視角','reset'],['專注模式','focus']],report:[['輸出鏡頭配置報告（下一階段）','todo']]};$('toolShelf').innerHTML=`<span class="tool-label">${menu.toUpperCase()}</span>`+(data[menu]||[]).map(([x,a])=>`<button data-act="${a}">${x}</button>`).join('');$('toolShelf').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>runTool(b.dataset.act))}
-function runTool(a){if(a==='save')return saveProject();if(a==='export')return exportProject();if(a==='new-scene')return openSceneModal();if(a==='plan')return $('planFileInput').click();if(a==='op1'&&currentScene?.plan){currentScene.plan.opacity=1;buildFloor()}else if(a==='op5'&&currentScene?.plan){currentScene.plan.opacity=.5;buildFloor()}else if(a==='add-wall'){draftWall={points:[],mousePoint:null};setMode('add-wall');}else if(a==='add-column')setMode('add-column');else if(a==='add-car')setMode('add-car');else if(a==='add-motorcycle')setMode('add-motorcycle');else if(a==='add-parking')setMode('add-parking');else if(a==='add-camera')setMode('add-camera');else if(a==='add-mark')setMode('add-mark');else if(a==='show'){currentScene.cameras.forEach(c=>c.showFov=true);renderObjects()}else if(a==='hide'){currentScene.cameras.forEach(c=>c.showFov=false);renderObjects()}else if(a==='cams-existing'){currentScene.cameras.forEach(c=>c.status='existing');renderObjects()}else if(a==='cams-new'){currentScene.cameras.forEach(c=>c.status='new');renderObjects()}else if(a==='3d')resetView();else if(a==='top')topView();else if(a==='reset')resetView();else if(a==='focus')toggleFocus();else toast('此功能排在下一階段加入')}
+
+function cameraStatusLabel(status){
+  return status==='new'?'增設':status==='fault'?'故障':'原建置';
+}
+function cameraStatusColor(status){
+  return status==='new'?'#eab308':status==='fault'?'#f97316':'#dc2626';
+}
+function reportSceneList(scope){
+  if(!currentProject)return [];
+  if(scope==='all')return currentProject.scenes||[];
+  return currentScene?[currentScene]:[];
+}
+function updateReportModalSummary(){
+  const scenes=reportSceneList($('reportScope')?.value||'current');
+  const cams=scenes.flatMap(s=>s.cameras||[]);
+  $('reportProjectName').textContent=currentProject?.name||'—';
+  $('reportFloorName').textContent=$('reportScope')?.value==='all'?'全部樓層':(currentScene?.name||'—');
+  $('reportCameraCount').textContent=cams.length;
+  $('reportNewCameraCount').textContent=cams.filter(c=>c.status==='new').length;
+}
+function openCameraReportModal(){
+  if(!currentProject)return toast('請先開啟專案');
+  if(!currentProject.scenes?.length)return toast('目前專案沒有樓層');
+  $('reportScope').value='current';
+  $('reportIncludeSnapshot').checked=true;
+  $('reportIncludeNotes').checked=true;
+  $('reportOnlyPublicMarks').checked=true;
+  updateReportModalSummary();
+  showModal('cameraReportModal');
+}
+function rendererSnapshotDataUrl(){
+  try{
+    renderer.render(scene3d,camera3d);
+    return renderer.domElement.toDataURL('image/png',.92);
+  }catch(err){
+    console.warn('3D snapshot failed:',err);
+    return '';
+  }
+}
+function buildCameraReportHtml({autoPrint=false}={}){
+  const scope=$('reportScope').value;
+  const includeSnapshot=$('reportIncludeSnapshot').checked;
+  const includeNotes=$('reportIncludeNotes').checked;
+  const onlyPublicMarks=$('reportOnlyPublicMarks').checked;
+  const scenes=reportSceneList(scope);
+  const allCams=scenes.flatMap(s=>(s.cameras||[]).map(c=>({scene:s,camera:c})));
+  const existing=allCams.filter(x=>x.camera.status==='existing').length;
+  const added=allCams.filter(x=>x.camera.status==='new').length;
+  const fault=allCams.filter(x=>x.camera.status==='fault').length;
+  const snapshot=includeSnapshot?rendererSnapshotDataUrl():'';
+  const generated=new Date().toLocaleString('zh-TW');
+
+  const escHtml=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
+  const sceneSections=scenes.map(s=>{
+    const cams=s.cameras||[];
+    const marks=(s.marks||[]).filter(m=>!onlyPublicMarks||m.public!==false);
+    const rows=cams.length?cams.map((c,i)=>`
+      <tr>
+        <td>${i+1}</td>
+        <td>${escHtml(c.name)}</td>
+        <td><span class="status-dot" style="background:${cameraStatusColor(c.status)}"></span>${cameraStatusLabel(c.status)}</td>
+        <td>${escHtml(c.lens)} mm</td>
+        <td>${escHtml(c.range)} m</td>
+        <td>${escHtml(c.yaw)}°</td>
+        <td>${escHtml(c.height)} m</td>
+        <td>${c.fixed?'是':'否'}</td>
+        ${includeNotes?`<td>${escHtml(c.note||'')}</td>`:''}
+      </tr>`).join(''):`<tr><td colspan="${includeNotes?9:8}" class="empty-row">此樓層尚無監視器</td></tr>`;
+
+    const markRows=marks.length?`
+      <div class="marks">
+        <h4>標記 / 說明</h4>
+        ${marks.map(m=>`<div class="mark-item"><b>${escHtml(m.title||'標記')}</b><span>${escHtml(m.text||'')}</span></div>`).join('')}
+      </div>`:'';
+
+    return `
+      <section class="floor-section">
+        <div class="floor-title">
+          <h2>${escHtml(s.type||'')}｜${escHtml(s.name||'')}</h2>
+          <span>${cams.length} 支鏡頭</span>
+        </div>
+        <table>
+          <thead><tr>
+            <th>#</th><th>鏡頭名稱</th><th>狀態</th><th>焦段</th>
+            <th>距離</th><th>方向</th><th>高度</th><th>固定</th>
+            ${includeNotes?'<th>備註</th>':''}
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${markRows}
+      </section>`;
+  }).join('');
+
+  const snapshotHtml=snapshot?`
+    <section class="snapshot-section">
+      <h2>3D 配置畫面</h2>
+      <img src="${snapshot}" alt="3D CCTV 配置畫面">
+      <p class="small">黃色閃爍星星代表「增設鏡頭」。</p>
+    </section>`:'';
+
+  return `<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>${escHtml(currentProject.name)}｜CCTV 鏡頭配置報告</title>
+<style>
+  *{box-sizing:border-box}body{font-family:"Microsoft JhengHei","Noto Sans TC",sans-serif;margin:0;color:#18212b;background:#fff}
+  .page{max-width:1180px;margin:auto;padding:28px}
+  .head{border-bottom:3px solid #123a54;padding-bottom:14px;margin-bottom:18px}
+  .head h1{margin:0 0 6px;font-size:27px}.head p{margin:2px 0;color:#5c6b77;font-size:12px}
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:16px 0 20px}
+  .summary div{border:1px solid #d5dee5;border-radius:8px;padding:10px;background:#f8fafc}
+  .summary span{display:block;color:#667784;font-size:10px}.summary b{font-size:18px}
+  .snapshot-section{page-break-inside:avoid;margin:20px 0}.snapshot-section h2,.floor-title h2{font-size:17px;margin:0 0 10px}
+  .snapshot-section img{width:100%;max-height:590px;object-fit:contain;border:1px solid #d5dee5;background:#0b1520}
+  .small{font-size:10px;color:#6c7a86}
+  .floor-section{margin:24px 0;page-break-inside:auto}
+  .floor-title{display:flex;justify-content:space-between;align-items:center;border-left:5px solid #1f7892;padding-left:10px;margin-bottom:9px}
+  .floor-title span{font-size:11px;color:#5f7180}
+  table{border-collapse:collapse;width:100%;font-size:10px}
+  th,td{border:1px solid #cfd8df;padding:6px;vertical-align:top}th{background:#edf3f7;text-align:left;white-space:nowrap}
+  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+  .marks{margin-top:12px;border:1px solid #d9e1e6;border-radius:8px;padding:10px}.marks h4{margin:0 0 8px}
+  .mark-item{display:flex;gap:12px;border-top:1px solid #edf1f4;padding:6px 0;font-size:10px}.mark-item:first-of-type{border-top:0}
+  .mark-item b{min-width:120px}.empty-row{text-align:center;color:#74838e}
+  .footer{margin-top:24px;padding-top:10px;border-top:1px solid #d7dee3;font-size:9px;color:#71808c}
+  @media print{
+    @page{size:A4 landscape;margin:10mm}
+    .page{max-width:none;padding:0}
+    .summary{break-inside:avoid}
+    .snapshot-section{break-inside:avoid}
+    tr{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <h1>${escHtml(currentProject.name)}｜CCTV 鏡頭配置報告</h1>
+    <p>案場類型：${escHtml(currentProject.siteType||'')}</p>
+    <p>地址：${escHtml(currentProject.address||'')}</p>
+    <p>產生時間：${generated}｜系統版本：${APP_VERSION}</p>
+  </div>
+
+  <div class="summary">
+    <div><span>鏡頭總數</span><b>${allCams.length}</b></div>
+    <div><span>原建置</span><b>${existing}</b></div>
+    <div><span>增設</span><b>${added}</b></div>
+    <div><span>故障</span><b>${fault}</b></div>
+  </div>
+
+  ${snapshotHtml}
+  ${sceneSections}
+
+  <div class="footer">3D CCTV Planner｜此報告供監視器配置、視野與增設位置說明使用。</div>
+</div>
+<script>
+  ${autoPrint?`window.addEventListener('load',()=>setTimeout(()=>window.print(),450));`:''}
+</script>
+</body>
+</html>`;
+}
+
+function openCameraReportPreview(autoPrint=false){
+  const report=buildCameraReportHtml({autoPrint});
+  const win=window.open('','_blank');
+  if(!win){
+    alert('瀏覽器阻擋了報告視窗，請允許此網站開啟彈出視窗。');
+    return;
+  }
+  win.document.open();
+  win.document.write(report);
+  win.document.close();
+}
+
+function renderTools(menu){const data={project:[['儲存專案','save'],['匯出專案','export'],['新增樓層','new-scene']],plan:[['匯入 / 更換圖面','plan'],['透明度 100%','op1'],['透明度 50%','op5']],environment:[['＋ 牆體','add-wall'],['＋ 柱子','add-column'],['＋ 汽車','add-car'],['＋ 機車','add-motorcycle'],['＋ 停車格','add-parking']],camera:[['＋ 新增監視器','add-camera'],['顯示全部視野','show'],['隱藏全部視野','hide'],['全部設為原建置','cams-existing'],['全部設為增設','cams-new']],mark:[['＋ 新增標記','add-mark']],measure:[['兩點實尺校正（下一階段）','todo']],view:[['3D','3d'],['俯視','top'],['重設視角','reset'],['專注模式','focus']],report:[['輸出鏡頭配置報告','camera-report']]};$('toolShelf').innerHTML=`<span class="tool-label">${menu.toUpperCase()}</span>`+(data[menu]||[]).map(([x,a])=>`<button data-act="${a}">${x}</button>`).join('');$('toolShelf').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>runTool(b.dataset.act))}
+function runTool(a){if(a==='save')return saveProject();if(a==='export')return exportProject();if(a==='new-scene')return openSceneModal();if(a==='plan')return $('planFileInput').click();if(a==='op1'&&currentScene?.plan){currentScene.plan.opacity=1;buildFloor()}else if(a==='op5'&&currentScene?.plan){currentScene.plan.opacity=.5;buildFloor()}else if(a==='add-wall'){draftWall={points:[],mousePoint:null};setMode('add-wall');}else if(a==='add-column')setMode('add-column');else if(a==='add-car')setMode('add-car');else if(a==='add-motorcycle')setMode('add-motorcycle');else if(a==='add-parking')setMode('add-parking');else if(a==='add-camera')setMode('add-camera');else if(a==='add-mark')setMode('add-mark');else if(a==='show'){currentScene.cameras.forEach(c=>c.showFov=true);renderObjects()}else if(a==='hide'){currentScene.cameras.forEach(c=>c.showFov=false);renderObjects()}else if(a==='cams-existing'){currentScene.cameras.forEach(c=>c.status='existing');renderObjects()}else if(a==='cams-new'){currentScene.cameras.forEach(c=>c.status='new');renderObjects()}else if(a==='3d')resetView();else if(a==='top')topView();else if(a==='reset')resetView();else if(a==='focus')toggleFocus();else if(a==='camera-report')openCameraReportModal();else toast('此功能排在下一階段加入')}
 document.querySelectorAll('.main-menu button').forEach(b=>b.onclick=()=>renderTools(b.dataset.menu));
 
 function applyPanels(){const g=$('editorGrid');g.classList.toggle('left-collapsed',!!uiState.leftCollapsed);g.classList.toggle('right-collapsed',!!uiState.rightCollapsed);$('expandLeftBtn').classList.toggle('hidden',!uiState.leftCollapsed);$('expandRightBtn').classList.toggle('hidden',!uiState.rightCollapsed);requestAnimationFrame(resize)}
 $('collapseLeftBtn').onclick=()=>{uiState.leftCollapsed=true;saveUIState();applyPanels()};$('expandLeftBtn').onclick=()=>{uiState.leftCollapsed=false;saveUIState();applyPanels()};$('collapseRightBtn').onclick=()=>{uiState.rightCollapsed=true;saveUIState();applyPanels()};$('expandRightBtn').onclick=()=>{uiState.rightCollapsed=false;saveUIState();applyPanels()};function toggleFocus(){document.body.classList.toggle('focus-mode');requestAnimationFrame(resize)}$('focusModeBtn').onclick=toggleFocus;
 function showModal(id){$(id).classList.remove('hidden')}function hideModal(id){$(id).classList.add('hidden')}document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>hideModal(b.dataset.close));
+
+$('reportScope')?.addEventListener('change',updateReportModalSummary);
+$('previewCameraReportBtn')?.addEventListener('click',()=>openCameraReportPreview(false));
+$('printCameraReportBtn')?.addEventListener('click',()=>openCameraReportPreview(true));
+
 $('newProjectBtn').onclick=()=>showModal('newProjectModal');$('createProjectConfirmBtn').onclick=async()=>{const name=$('newProjectName').value.trim();if(!name)return alert('請輸入專案名稱');const p=newProject({name,siteType:$('newProjectType').value,address:$('newProjectAddress').value.trim(),note:$('newProjectNote').value.trim()});await dbPut(p);hideModal('newProjectModal');openProject(p.id)};
 function openSceneModal(){if(!currentProject)return;$('newSceneType').value='B1';$('newSceneName').value='B1 地下停車場';showModal('newSceneModal')}$('addSceneBtn').onclick=openSceneModal;$('emptyAddSceneBtn').onclick=openSceneModal;$('newSceneType').onchange=()=>{const t=$('newSceneType').value;$('newSceneName').value=t==='自訂'?'':`${t} ${t.startsWith('B')?'地下停車場':'場景'}`};$('createSceneConfirmBtn').onclick=async()=>{const t=$('newSceneType').value,n=$('newSceneName').value.trim()||t,s=newScene(t,n);currentProject.scenes.push(s);currentScene=s;hideModal('newSceneModal');await saveProject(false);refreshEditor()};
 $('backHomeBtn').onclick=goHome;$('saveProjectBtn').onclick=()=>saveProject();$('projectNameInput').onchange=()=>saveProject(false);$('sceneNameInput').onchange=async()=>{if(currentScene){currentScene.name=$('sceneNameInput').value.trim()||currentScene.name;await saveProject(false);refreshEditor()}};$('sceneTypeInput').onchange=async()=>{if(currentScene){currentScene.type=$('sceneTypeInput').value;await saveProject(false);refreshEditor()}};$('planOpacityInput').oninput=()=>{if(currentScene?.plan){currentScene.plan.opacity=+$('planOpacityInput').value;$('planOpacityOut').textContent=`${Math.round(currentScene.plan.opacity*100)}%`;if(floorPlane)floorPlane.material.opacity=currentScene.plan.opacity}};$('planRotationInput').onchange=async()=>{if(currentScene?.plan){currentScene.plan.rotation=+$('planRotationInput').value;await saveProject(false);buildFloor()}};
