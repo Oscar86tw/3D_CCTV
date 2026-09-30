@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.9';
+import { APP_CONFIG } from './config.js?v=2.10';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v29-api-url';
+const API_CACHE_KEY='utop-cctv-v210-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.9'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.9`);
+    if(apiVersion!=='2.10'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.10`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -653,7 +653,7 @@ function finishWall(closed=false){
     closed,
     height:2.8,
     thickness:.18,
-    fixed:false,
+    fixed:true,
     hidden:false,
     occludes:true,
     angle:0,
@@ -790,24 +790,75 @@ function obstacleSegments(){
   return out;
 }
 function cameraCoverage(c){
-  const pre=LENS[String(c.lens)]||LENS['2.8'],range=Number(c.range||pre.range),fov=THREE.MathUtils.degToRad(pre.fov),yaw=THREE.MathUtils.degToRad(Number(c.yaw||0)),segs=obstacleSegments(),shape=new THREE.Shape();
-  const origin={x:(c.x||0)+Math.sin(yaw)*0.88,z:(c.z||0)-Math.cos(yaw)*0.88};
+  const pre=LENS[String(c.lens)]||LENS['2.8'];
+  const range=Number(c.range||pre.range);
+  const fov=THREE.MathUtils.degToRad(pre.fov);
+  const yaw=THREE.MathUtils.degToRad(Number(c.yaw||0));
+
+  // V2.10：視野改為完整扇形，不再因牆、柱、車輛而被切掉。
+  // 視野仍由鏡頭前端開始，保持鏡頭方向與 FOV 一致。
+  const origin={
+    x:(c.x||0)+Math.sin(yaw)*0.88,
+    z:(c.z||0)-Math.cos(yaw)*0.88
+  };
+
+  const shape=new THREE.Shape();
   shape.moveTo(0,0);
-  const samples=40;
+  const boundary=[];
+  const samples=48;
+  let first=null,last=null;
+
   for(let i=0;i<=samples;i++){
-    const off=-fov/2+fov*i/samples,ang=yaw+off,dir={x:Math.sin(ang),z:-Math.cos(ang)};
-    let d=range;
-    for(const [a,b] of segs){const t=raySeg(origin,dir,a,b);if(t!==null&&t<d)d=t}
-    shape.lineTo(dir.x*d,dir.z*d)
+    const off=-fov/2+fov*i/samples;
+    const ang=yaw+off;
+    const px=Math.sin(ang)*range;
+    const pz=-Math.cos(ang)*range;
+    if(i===0)first={x:px,z:pz};
+    last={x:px,z:pz};
+    shape.lineTo(px,pz);
+    boundary.push(new THREE.Vector3(px,.068,pz));
   }
   shape.closePath();
-  const mesh=new THREE.Mesh(
+
+  const group=new THREE.Group();
+  group.position.set(origin.x,0,origin.z);
+  group.userData={kind:'camera-coverage',id:c.id};
+
+  const fill=new THREE.Mesh(
     new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),
-    new THREE.MeshBasicMaterial({color:COLORS[c.status]||COLORS.existing,transparent:true,opacity:.18,side:THREE.DoubleSide,depthWrite:false})
+    new THREE.MeshBasicMaterial({
+      color:COLORS[c.status]||COLORS.existing,
+      transparent:true,
+      opacity:.18,
+      side:THREE.DoubleSide,
+      depthWrite:false
+    })
   );
-  mesh.position.set(origin.x,.055,origin.z);
-  mesh.userData={kind:'camera-coverage',id:c.id};
-  return mesh
+  fill.position.y=.055;
+  fill.userData={kind:'camera-coverage',id:c.id};
+  group.add(fill);
+
+  // 完整外框：左邊界 → 弧線 → 右邊界 → 回到鏡頭前端。
+  const outlinePts=[
+    new THREE.Vector3(0,.07,0),
+    new THREE.Vector3(first.x,.07,first.z),
+    ...boundary.slice(1),
+    new THREE.Vector3(0,.07,0)
+  ];
+  const outline=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(outlinePts),
+    new THREE.LineBasicMaterial({
+      color:COLORS[c.status]||COLORS.existing,
+      transparent:true,
+      opacity:.72,
+      depthTest:false
+    })
+  );
+  outline.renderOrder=8;
+  outline.userData={kind:'camera-coverage',id:c.id};
+  group.add(outline);
+
+  return group;
 }
 
 function createFivePointStarShape(outer=0.9,inner=0.4){
@@ -1041,7 +1092,7 @@ function renderObjects(){
 function buildScene(){buildFloor();renderObjects();resize();if(currentScene?.plan)resetView()}
 function planePoint(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);const p=new THREE.Vector3();return raycaster.ray.intersectPlane(dragPlane,p)?p:null}
 function hit(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);for(const h of raycaster.intersectObjects([environmentRoot,cameraRoot,markRoot],true)){let o=h.object;while(o&&!o.userData?.kind)o=o.parent;if(o?.userData?.kind&&o.userData.kind!=='camera-coverage')return o.userData}return null}
-function addObstacle(type,x,z){currentScene.obstacles=currentScene.obstacles||[];const n=currentScene.obstacles.filter(o=>o.type===type).length+1,labels={wall:'牆體',column:'柱子',car:'汽車',motorcycle:'機車',parking:'停車格'},o={id:uid('obs'),type,name:`${labels[type]}-${String(n).padStart(2,'0')}`,x,z,angle:0,fixed:false,hidden:false,occludes:type!=='parking',length:8,height:2.8,thickness:.18,width:type==='parking'?2.5:.8,depth:type==='parking'?5:.8};currentScene.obstacles.push(o);selected={kind:'obstacle',id:o.id};renderObjects();showProperties();saveProject(false)}
+function addObstacle(type,x,z){currentScene.obstacles=currentScene.obstacles||[];const n=currentScene.obstacles.filter(o=>o.type===type).length+1,labels={wall:'牆體',column:'柱子',car:'汽車',motorcycle:'機車',parking:'停車格'},o={id:uid('obs'),type,name:`${labels[type]}-${String(n).padStart(2,'0')}`,x,z,angle:0,fixed:type==='wall',hidden:false,occludes:type!=='parking',length:8,height:2.8,thickness:.18,width:type==='parking'?2.5:.8,depth:type==='parking'?5:.8};currentScene.obstacles.push(o);selected={kind:'obstacle',id:o.id};renderObjects();showProperties();saveProject(false)}
 renderer.domElement.addEventListener('pointerdown',e=>{
   if(!currentScene?.plan)return;
   const p=planePoint(e);
@@ -1145,7 +1196,7 @@ function newProject(data){return{id:uid('project'),name:data.name,siteType:data.
 function newScene(type,name){return{id:uid('scene'),type,name:name||type,plan:null,cameras:[],marks:[],obstacles:[]}}
 async function saveProject(show=true){if(!currentProject)return;currentProject.name=$('projectNameInput').value.trim()||currentProject.name;currentProject.updatedAt=now();currentProject.version=APP_VERSION;await dbPut(clone(currentProject));$('editorProjectName').textContent=currentProject.name;$('saveInfo').textContent=`本機已儲存 ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;if(show){try{if(APP_CONFIG.cloudApi?.enabled){await saveProjectCloud(currentProject);await dbPut(clone(currentProject))}toast('專案已儲存')}catch(err){setCloudStatus(false,'雲端儲存失敗');alert(`本機已儲存，但 Google Drive 同步失敗：${err.message}`)}}}
 async function renderProjectCards(){const list=await dbAll(),el=$('projectCards');if(!list.length){el.innerHTML='<div class="empty-card">尚無專案。先按「建立新專案」，再建立樓層與匯入圖面。</div>';return}el.innerHTML=list.map(p=>{const n=(p.scenes||[]).reduce((s,x)=>s+(x.cameras?.length||0),0);return `<article class="project-card"><div><h3>${esc(p.name)}</h3><div class="meta">${esc(p.siteType||'')}<br>${p.scenes?.length||0} 個樓層・${n} 支鏡頭</div></div><div class="card-footer"><span class="meta">${new Date(p.updatedAt).toLocaleString()}</span><button data-open="${esc(p.id)}">開啟專案</button></div></article>`}).join('');el.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openProject(b.dataset.open))}
-async function openProject(id){const p=await dbGet(id);if(!p)return;currentProject=p;(currentProject.scenes||[]).forEach(s=>{s.cameras=s.cameras||[];s.marks=s.marks||[];s.obstacles=s.obstacles||[]});currentScene=p.scenes?.[0]||null;selected={kind:null,id:null};$('projectHome').classList.add('hidden');$('editorApp').classList.remove('hidden');$('projectNameInput').value=p.name;applyPanels();refreshEditor()}
+async function openProject(id){const p=await dbGet(id);if(!p)return;currentProject=p;(currentProject.scenes||[]).forEach(s=>{s.cameras=s.cameras||[];s.marks=s.marks||[];s.obstacles=s.obstacles||[];s.obstacles.forEach(o=>{if((o.type==='wall'||o.type==='wallpath')&&typeof o.fixed!=='boolean')o.fixed=true;});});currentScene=p.scenes?.[0]||null;selected={kind:null,id:null};$('projectHome').classList.add('hidden');$('editorApp').classList.remove('hidden');$('projectNameInput').value=p.name;applyPanels();refreshEditor()}
 async function goHome(){if(currentProject)await saveProject(false);currentProject=null;currentScene=null;$('editorApp').classList.add('hidden');$('projectHome').classList.remove('hidden');renderProjectCards()}
 function renderSceneTree(){const el=$('sceneTree');if(!currentProject?.scenes?.length){el.innerHTML='<div class="empty-card" style="padding:18px">尚未建立樓層</div>';return}el.innerHTML=currentProject.scenes.map(s=>`<div class="scene-item ${currentScene?.id===s.id?'active':''}" data-id="${s.id}"><div class="scene-icon">${esc(s.type)}</div><div class="scene-text"><strong>${esc(s.name)}</strong><small>${s.plan?esc(s.plan.fileName):'尚未匯入圖面'}</small></div><span class="dot ${s.plan?'ready':''}"></span></div>`).join('');el.querySelectorAll('.scene-item').forEach(x=>x.onclick=()=>{currentScene=currentProject.scenes.find(s=>s.id===x.dataset.id);selected={kind:null,id:null};refreshEditor()})}
 function refreshCounts(){if(!currentProject)return;const tc=currentProject.scenes.reduce((n,s)=>n+(s.cameras?.length||0),0),tm=currentProject.scenes.reduce((n,s)=>n+(s.marks?.length||0),0);$('sceneCount').textContent=currentProject.scenes.length;$('projectCameraCount').textContent=tc;$('projectMarkCount').textContent=tm;$('sceneCameraCount').textContent=currentScene?.cameras?.length||0;$('sceneMarkCount').textContent=currentScene?.marks?.length||0;$('sceneObstacleCount').textContent=currentScene?.obstacles?.length||0;$('cameraInfo').textContent=`鏡頭：${currentScene?.cameras?.length||0}`;$('planInfo').textContent=`圖面：${currentScene?.plan?.fileName||'—'}`;if($('camCountExisting'))$('camCountExisting').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='existing').length;if($('camCountNew'))$('camCountNew').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='new').length;if($('camCountFault'))$('camCountFault').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='fault').length}
