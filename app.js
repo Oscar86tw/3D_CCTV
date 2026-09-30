@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.8';
+import { APP_CONFIG } from './config.js?v=2.9';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v28-api-url';
+const API_CACHE_KEY='utop-cctv-v29-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.8'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.8`);
+    if(apiVersion!=='2.9'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.9`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -878,11 +878,12 @@ function makeNewCameraStar(c){
 }
 
 function makeCamera(c){
+  // 模組本體需與 cameraCoverage() 的視野方向一致。V2.9 將模型相對舊版旋轉 180°。
   const isSelected=selected.kind==='camera'&&selected.id===c.id;
   const color=COLORS[c.status]||COLORS.existing;
   const g=new THREE.Group();
   g.position.set(c.x||0,0,c.z||0);
-  g.rotation.y=-THREE.MathUtils.degToRad(Number(c.yaw||0));
+  g.rotation.y=Math.PI-THREE.MathUtils.degToRad(Number(c.yaw||0));
   g.userData={kind:'camera',id:c.id};
 
   const bodyMat=new THREE.MeshStandardMaterial({
@@ -1015,17 +1016,7 @@ function makeCamera(c){
     g.add(rib);
   });
 
-  const beamRange=Math.min(Number(c.range||(LENS[String(c.lens)]||LENS['2.8']).range),8);
-  const beamFov=THREE.MathUtils.degToRad((LENS[String(c.lens)]||LENS['2.8']).fov);
-  const beamRadius=Math.max(.35,Math.tan(beamFov/2)*beamRange*.55);
-  const beam=new THREE.Mesh(
-    new THREE.CylinderGeometry(.04,beamRadius,beamRange,4,1,true),
-    new THREE.MeshBasicMaterial({color:0x93c5fd,transparent:true,opacity:.12,side:THREE.DoubleSide,depthWrite:false})
-  );
-  beam.rotation.x=-Math.PI/2;
-  beam.position.set(0,2.74,-(.86+beamRange/2));
-  beam.userData={kind:'camera-coverage',id:c.id};
-  if(c.showFov!==false)g.add(beam);
+  // V2.9：取消鏡頭前方的透明立體光束；僅保留地面 FOV / 遮擋範圍。
 
   return g;
 }
