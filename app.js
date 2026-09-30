@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.12';
+import { APP_CONFIG } from './config.js?v=2.13';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v212-api-url';
+const API_CACHE_KEY='utop-cctv-v213-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.12'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.12`);
+    if(apiVersion!=='2.13'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.13`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -805,21 +805,15 @@ function cameraCoverage(c){
   const fov=THREE.MathUtils.degToRad(pre.fov);
   const pose=getCameraPose(c);
 
-  // V2.12：視野改在「鏡頭模型同一座標系」內建立，再與模型套用同方向旋轉。
-  // 這樣鏡頭本體與 FOV 不會再一個往左、一個往右。
+  // V2.13：每支鏡頭只保留一個完整扇形視野，不再額外疊加第二組線框。
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
-  const boundary=[];
-  const samples=56;
-  let first=null;
-
+  const samples=72;
   for(let i=0;i<=samples;i++){
     const off=-fov/2+fov*i/samples;
     const px=Math.sin(off)*range;
     const pz=-Math.cos(off)*range;
-    if(i===0)first={x:px,z:pz};
     shape.lineTo(px,pz);
-    boundary.push(new THREE.Vector3(px,.068,pz));
   }
   shape.closePath();
 
@@ -828,34 +822,20 @@ function cameraCoverage(c){
   group.rotation.y=pose.modelRotationY;
   group.userData={kind:'camera-coverage',id:c.id};
 
-  const fill=new THREE.Mesh(
+  const coverage=new THREE.Mesh(
     new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),
     new THREE.MeshBasicMaterial({
       color:COLORS[c.status]||COLORS.existing,
       transparent:true,
-      opacity:.18,
+      opacity:.24,
       side:THREE.DoubleSide,
       depthWrite:false
     })
   );
-  fill.position.set(0,.055,pose.muzzleOffsetZ);
-  fill.userData={kind:'camera-coverage',id:c.id};
-  group.add(fill);
-
-  const outlinePts=[new THREE.Vector3(0,.07,0),new THREE.Vector3(first.x,.07,first.z),...boundary.slice(1),new THREE.Vector3(0,.07,0)];
-  const outline=new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(outlinePts),
-    new THREE.LineBasicMaterial({
-      color:COLORS[c.status]||COLORS.existing,
-      transparent:true,
-      opacity:.78,
-      depthTest:false
-    })
-  );
-  outline.position.set(0,0,pose.muzzleOffsetZ);
-  outline.renderOrder=8;
-  outline.userData={kind:'camera-coverage',id:c.id};
-  group.add(outline);
+  coverage.position.set(0,.055,pose.muzzleOffsetZ);
+  coverage.renderOrder=6;
+  coverage.userData={kind:'camera-coverage',id:c.id};
+  group.add(coverage);
 
   return group;
 }
