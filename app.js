@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.11';
+import { APP_CONFIG } from './config.js?v=2.12';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v211-api-url';
+const API_CACHE_KEY='utop-cctv-v212-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.11'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.11`);
+    if(apiVersion!=='2.12'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.12`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -789,18 +789,24 @@ function obstacleSegments(){
   });
   return out;
 }
+function getCameraPose(c){
+  const yawDeg=Number(c.yaw||0);
+  const yawRad=THREE.MathUtils.degToRad(yawDeg);
+  // 模型本體 local -Z 為鏡頭朝向，因此旋轉採 -yaw。
+  const modelRotationY=-yawRad;
+  const mountY=2.7;
+  const muzzleOffsetZ=-0.965;
+  return {yawDeg,yawRad,modelRotationY,mountY,muzzleOffsetZ};
+}
+
 function cameraCoverage(c){
   const pre=LENS[String(c.lens)]||LENS['2.8'];
   const range=Number(c.range||pre.range);
   const fov=THREE.MathUtils.degToRad(pre.fov);
-  const yaw=THREE.MathUtils.degToRad(Number(c.yaw||0));
+  const pose=getCameraPose(c);
 
-  // V2.11：視野起點改為鏡頭鏡片前端，與模型完全貼合。
-  const origin={
-    x:(c.x||0)+Math.sin(yaw)*0.965,
-    z:(c.z||0)-Math.cos(yaw)*0.965
-  };
-
+  // V2.12：視野改在「鏡頭模型同一座標系」內建立，再與模型套用同方向旋轉。
+  // 這樣鏡頭本體與 FOV 不會再一個往左、一個往右。
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
   const boundary=[];
@@ -809,9 +815,8 @@ function cameraCoverage(c){
 
   for(let i=0;i<=samples;i++){
     const off=-fov/2+fov*i/samples;
-    const ang=yaw+off;
-    const px=Math.sin(ang)*range;
-    const pz=-Math.cos(ang)*range;
+    const px=Math.sin(off)*range;
+    const pz=-Math.cos(off)*range;
     if(i===0)first={x:px,z:pz};
     shape.lineTo(px,pz);
     boundary.push(new THREE.Vector3(px,.068,pz));
@@ -819,7 +824,8 @@ function cameraCoverage(c){
   shape.closePath();
 
   const group=new THREE.Group();
-  group.position.set(origin.x,0,origin.z);
+  group.position.set(c.x||0,0,c.z||0);
+  group.rotation.y=pose.modelRotationY;
   group.userData={kind:'camera-coverage',id:c.id};
 
   const fill=new THREE.Mesh(
@@ -832,7 +838,7 @@ function cameraCoverage(c){
       depthWrite:false
     })
   );
-  fill.position.y=.055;
+  fill.position.set(0,.055,pose.muzzleOffsetZ);
   fill.userData={kind:'camera-coverage',id:c.id};
   group.add(fill);
 
@@ -846,6 +852,7 @@ function cameraCoverage(c){
       depthTest:false
     })
   );
+  outline.position.set(0,0,pose.muzzleOffsetZ);
   outline.renderOrder=8;
   outline.userData={kind:'camera-coverage',id:c.id};
   group.add(outline);
@@ -925,8 +932,9 @@ function makeCamera(c){
   const color=COLORS[c.status]||COLORS.existing;
   const g=new THREE.Group();
   g.position.set(c.x||0,0,c.z||0);
-  // V2.11：鏡頭朝向與 FOV 完全一致，local -Z 即為發射方向。
-  g.rotation.y=-THREE.MathUtils.degToRad(Number(c.yaw||0));
+  const pose=getCameraPose(c);
+  // V2.12：鏡頭本體與 FOV 共用同一組方向資料。
+  g.rotation.y=pose.modelRotationY;
   g.userData={kind:'camera',id:c.id};
 
   const shellMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:0xe7ebef,metalness:.32,roughness:.46,emissive:isSelected?0x334155:0x000000});
