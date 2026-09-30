@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>昱拓弱電｜3D CCTV 編輯器 V2.5</title>
-  <link rel="stylesheet" href="styles.css?v=2.5">
+  <title>昱拓弱電｜3D CCTV 編輯器 V2.6</title>
+  <link rel="stylesheet" href="styles.css?v=2.6">
 </head>
 <body>
 <section id="projectHome" class="project-home">
@@ -14,7 +14,7 @@
       <h1>3D CCTV 專案中心</h1>
       <p>先建立社區專案，再建立樓層／場景、匯入平面圖，最後進行 CCTV 3D 配置。</p>
     </div>
-    <span class="version">V2.5</span>
+    <span class="version">V2.6</span>
   </header>
   <div class="home-actions">
     <button id="newProjectBtn" class="primary big">＋ 建立新專案</button>
@@ -52,7 +52,7 @@
       <button data-menu="view">視角</button>
       <button data-menu="report">報告</button>
     </nav>
-    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.5</span></div>
+    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.6</span></div>
   </header>
 
   <div id="editorGrid" class="editor-grid">
@@ -111,7 +111,7 @@
       </div>
       <div id="obstacleProperties" class="property-pane hidden">
         <label>環境物件名稱<input id="obsName" type="text"></label>
-        <div class="two"><label>類型<select id="obsType"><option value="wall">牆體</option><option value="column">柱子</option><option value="car">汽車</option><option value="motorcycle">機車</option><option value="parking">停車格</option></select></label><label>角度<input id="obsAngle" type="number" min="0" max="359" step="1"></label></div>
+        <div class="two"><label>類型<select id="obsType"><option value="wall">單段牆體</option><option value="wallpath">連續牆體</option><option value="column">柱子</option><option value="car">汽車</option><option value="motorcycle">機車</option><option value="parking">停車格</option></select></label><label>角度<input id="obsAngle" type="number" min="0" max="359" step="1"></label></div>
         <label>長度（m）<input id="obsLength" type="number" min="0.5" max="50" step="0.1"></label>
         <div class="two"><label>寬度（m）<input id="obsWidth" type="number" min="0.2" max="10" step="0.1"></label><label>深度（m）<input id="obsDepth" type="number" min="0.2" max="15" step="0.1"></label></div>
         <div class="two"><label>高度（m）<input id="obsHeight" type="number" min="0.2" max="10" step="0.1"></label><label>厚度（m）<input id="obsThickness" type="number" min="0.05" max="2" step="0.05"></label></div>
@@ -168,6 +168,6 @@
 
 <div id="toast" class="toast hidden"></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
-<script type="module" src="app.js?v=2.5"></script>
+<script type="module" src="app.js?v=2.6"></script>
 </body>
 </html>

@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.5';
+import { APP_CONFIG } from './config.js?v=2.6';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v25-api-url';
+const API_CACHE_KEY='utop-cctv-v26-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -17,6 +17,7 @@ const COLORS={existing:0xdc2626,new:0xeab308,fault:0xf97316};
 const FLOORS=['RF','R1F','1MF','1F','2F','3F','B1','B2','B3','B4','B5','B6','自訂'];
 let db,currentProject=null,currentScene=null,selected={kind:null,id:null},mode='select',drag=null,floorPlane=null;
 let uiState=loadUIState();
+let draftWall={points:[],mousePoint:null};
 
 let cloudLoadCancelRequested=false;
 let cloudLoadStartedAt=0;
@@ -330,8 +331,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.4'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.4`);
+    if(apiVersion!=='2.6'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.6`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -486,7 +487,7 @@ const camera3d=new THREE.PerspectiveCamera(45,1,.1,500);camera3d.position.set(0,
 const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;viewer.prepend(renderer.domElement);
 const controls=new OrbitControls(camera3d,renderer.domElement);controls.enableDamping=true;controls.maxPolarAngle=Math.PI/2.02;controls.minDistance=10;controls.maxDistance=240;
 scene3d.add(new THREE.HemisphereLight(0xd5f1ff,0x17212b,1.8));const dl=new THREE.DirectionalLight(0xffffff,1.2);dl.position.set(30,70,40);scene3d.add(dl);
-const floorRoot=new THREE.Group(),environmentRoot=new THREE.Group(),cameraRoot=new THREE.Group(),markRoot=new THREE.Group();scene3d.add(floorRoot,environmentRoot,cameraRoot,markRoot);
+const floorRoot=new THREE.Group(),environmentRoot=new THREE.Group(),cameraRoot=new THREE.Group(),markRoot=new THREE.Group(),draftRoot=new THREE.Group();scene3d.add(floorRoot,environmentRoot,cameraRoot,markRoot,draftRoot);
 const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2(),dragPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
 
 function clearGroup(g){while(g.children.length){const o=g.children[0];g.remove(o);o.traverse?.(n=>{n.geometry?.dispose?.();if(n.material){(Array.isArray(n.material)?n.material:[n.material]).forEach(m=>{m.map?.dispose?.();m.dispose?.()})}})}}
@@ -498,30 +499,452 @@ function zoom(f){const d=camera3d.position.clone().sub(controls.target).multiply
 function worldSize(){const p=currentScene?.plan,r=p?.height&&p?.width?p.height/p.width:.72;return{w:100,h:100*r}}
 function buildFloor(){clearGroup(floorRoot);floorPlane=null;if(!currentScene?.plan?.dataUrl)return;const {w,h}=worldSize();const t=new THREE.TextureLoader().load(currentScene.plan.dataUrl);t.colorSpace=THREE.SRGBColorSpace;t.center.set(.5,.5);t.rotation=THREE.MathUtils.degToRad(Number(currentScene.plan.rotation||0));const m=new THREE.MeshBasicMaterial({map:t,transparent:true,opacity:Number(currentScene.plan.opacity??1),side:THREE.DoubleSide});floorPlane=new THREE.Mesh(new THREE.PlaneGeometry(w,h),m);floorPlane.rotation.x=-Math.PI/2;floorRoot.add(floorPlane);const grid=new THREE.GridHelper(Math.max(w,h),20,0x294255,0x172938);grid.position.y=.02;floorRoot.add(grid)}
 
+
+function pathOffsetPairs(points,half,closed){
+  const left=[],right=[],n=points.length;
+  const norm=(a,b)=>{
+    const dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz)||1;
+    return {x:-dz/len,z:dx/len};
+  };
+  for(let i=0;i<n;i++){
+    let offset;
+    if(!closed&&i===0){
+      const q=norm(points[0],points[1]);offset={x:q.x*half,z:q.z*half};
+    }else if(!closed&&i===n-1){
+      const q=norm(points[n-2],points[n-1]);offset={x:q.x*half,z:q.z*half};
+    }else{
+      const prev=norm(points[(i-1+n)%n],points[i]);
+      const next=norm(points[i],points[(i+1)%n]);
+      let mx=prev.x+next.x,mz=prev.z+next.z,ml=Math.hypot(mx,mz);
+      if(ml<1e-5){
+        offset={x:next.x*half,z:next.z*half};
+      }else{
+        mx/=ml;mz/=ml;
+        let denom=mx*next.x+mz*next.z;
+        if(Math.abs(denom)<.2)denom=denom<0?-.2:.2;
+        let scale=half/denom;
+        const limit=half*4;
+        scale=Math.max(-limit,Math.min(limit,scale));
+        offset={x:mx*scale,z:mz*scale};
+      }
+    }
+    left.push({x:points[i].x+offset.x,z:points[i].z+offset.z});
+    right.push({x:points[i].x-offset.x,z:points[i].z-offset.z});
+  }
+  return {left,right};
+}
+
+function buildContinuousWallGeometry(o){
+  const points=o.points||[],closed=!!o.closed,half=Number(o.thickness||.18)/2,height=Number(o.height||2.8);
+  if(points.length<2)return new THREE.BoxGeometry(.1,.1,.1);
+
+  const {left,right}=pathOffsetPairs(points,half,closed),verts=[],indices=[];
+  for(let i=0;i<points.length;i++){
+    verts.push(
+      left[i].x,0,left[i].z,
+      left[i].x,height,left[i].z,
+      right[i].x,0,right[i].z,
+      right[i].x,height,right[i].z
+    );
+  }
+
+  const quad=(a,b,c,d)=>indices.push(a,b,c,a,c,d);
+  const segCount=closed?points.length:points.length-1;
+  for(let i=0;i<segCount;i++){
+    const j=(i+1)%points.length,ib=i*4,jb=j*4;
+    quad(ib+1,jb+1,jb+3,ib+3);
+    quad(ib,ib+1,jb+1,jb);
+    quad(ib+2,jb+2,jb+3,ib+3);
+    quad(ib,jb,jb+2,ib+2);
+  }
+  if(!closed){
+    quad(0,2,3,1);
+    const b=(points.length-1)*4;
+    quad(b,b+1,b+3,b+2);
+  }
+
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function wallPathLength(o){
+  const pts=o.points||[];
+  if(pts.length<2)return 0;
+  let total=0;
+  const count=o.closed?pts.length:pts.length-1;
+  for(let i=0;i<count;i++){
+    const a=pts[i],b=pts[(i+1)%pts.length];
+    total+=Math.hypot(b.x-a.x,b.z-a.z);
+  }
+  return total;
+}
+
+function renderWallDraft(){
+  clearGroup(draftRoot);
+  if(!draftWall.points.length)return;
+
+  const pts=[...draftWall.points];
+  if(draftWall.mousePoint)pts.push(draftWall.mousePoint);
+
+  if(pts.length>=2){
+    const linePts=pts.map(p=>new THREE.Vector3(p.x,.12,p.z));
+    const line=new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(linePts),
+      new THREE.LineBasicMaterial({color:0xf59e0b,transparent:true,opacity:.95})
+    );
+    draftRoot.add(line);
+  }
+
+  draftWall.points.forEach((p,i)=>{
+    const dot=new THREE.Mesh(
+      new THREE.SphereGeometry(i===0?.28:.20,14,12),
+      new THREE.MeshStandardMaterial({color:i===0?0x22d3ee:0xf59e0b,emissive:i===0?0x073642:0x3b2500})
+    );
+    dot.position.set(p.x,.14,p.z);
+    draftRoot.add(dot);
+  });
+}
+
+function screenDistanceToWorldPoint(evt,p){
+  const rect=renderer.domElement.getBoundingClientRect();
+  const v=new THREE.Vector3(p.x,0,p.z).project(camera3d);
+  const sx=rect.left+(v.x+1)*rect.width/2;
+  const sy=rect.top+(1-v.y)*rect.height/2;
+  return Math.hypot(evt.clientX-sx,evt.clientY-sy);
+}
+
+function finishWall(closed=false){
+  if(draftWall.points.length<2){
+    toast('牆體至少需要兩個點位');
+    return;
+  }
+  if(closed&&draftWall.points.length<3){
+    toast('封閉牆體至少需要三個點位');
+    return;
+  }
+
+  const points=draftWall.points.map(p=>({x:+p.x.toFixed(3),z:+p.z.toFixed(3)}));
+  const n=(currentScene.obstacles||[]).filter(o=>o.type==='wallpath'||o.type==='wall').length+1;
+  const o={
+    id:uid('wallpath'),
+    type:'wallpath',
+    name:`牆體-${String(n).padStart(2,'0')}`,
+    points,
+    closed,
+    height:2.8,
+    thickness:.18,
+    fixed:false,
+    hidden:false,
+    occludes:true,
+    angle:0,
+    length:0,
+    width:.18,
+    depth:.18
+  };
+  o.length=+wallPathLength(o).toFixed(2);
+  currentScene.obstacles.push(o);
+  selected={kind:'obstacle',id:o.id};
+
+  draftWall={points:[],mousePoint:null};
+  setMode('select');
+  renderWallDraft();
+  renderObjects();
+  showProperties();
+  saveProject(false);
+}
+
 function obstacleColor(type){return type==='wall'?0x8b98a5:type==='column'?0x9aa6b2:type==='car'?0xe5e7eb:type==='motorcycle'?0x2563eb:0x94a3b8}
 function makeObstacle(o){
-  const g=new THREE.Group();g.position.set(o.x||0,0,o.z||0);g.rotation.y=THREE.MathUtils.degToRad(-(o.angle||0));g.userData={kind:'obstacle',id:o.id};
-  const mat=new THREE.MeshStandardMaterial({color:obstacleColor(o.type),transparent:true,opacity:o.hidden?.18:.82,roughness:.72});let mesh;
-  if(o.type==='wall'){mesh=new THREE.Mesh(new THREE.BoxGeometry(Number(o.length||8),Number(o.height||2.8),Number(o.thickness||.18)),mat);mesh.position.y=Number(o.height||2.8)/2}
-  else if(o.type==='column'){mesh=new THREE.Mesh(new THREE.BoxGeometry(Number(o.width||.8),Number(o.height||2.8),Number(o.depth||.8)),mat);mesh.position.y=Number(o.height||2.8)/2}
-  else if(o.type==='car'){mesh=new THREE.Mesh(new THREE.BoxGeometry(1.8,.85,4.2),mat);mesh.position.y=.65;const cabin=new THREE.Mesh(new THREE.BoxGeometry(1.55,.62,2),new THREE.MeshStandardMaterial({color:0xcbd5e1,transparent:true,opacity:.78}));cabin.position.set(0,1.15,-.1);cabin.userData={kind:'obstacle',id:o.id};g.add(cabin)}
-  else if(o.type==='motorcycle'){mesh=new THREE.Mesh(new THREE.BoxGeometry(.55,.65,1.8),mat);mesh.position.y=.45}
-  else{const w=Number(o.width||2.5),d=Number(o.depth||5),pts=[new THREE.Vector3(-w/2,.03,-d/2),new THREE.Vector3(w/2,.03,-d/2),new THREE.Vector3(w/2,.03,d/2),new THREE.Vector3(-w/2,.03,d/2),new THREE.Vector3(-w/2,.03,-d/2)];const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0xf8fafc,transparent:true,opacity:.8}));line.userData={kind:'obstacle',id:o.id};g.add(line);return g}
-  mesh.userData={kind:'obstacle',id:o.id};g.add(mesh);return g
+  const g=new THREE.Group();
+  g.userData={kind:'obstacle',id:o.id};
+
+  if(o.type==='wallpath'){
+    const geo=buildContinuousWallGeometry(o);
+    const selectedWall=selected.kind==='obstacle'&&selected.id===o.id;
+    const mat=new THREE.MeshStandardMaterial({
+      color:selectedWall?0x93c5fd:0x6487a7,
+      transparent:true,
+      opacity:o.hidden?.18:.9,
+      roughness:.65,
+      emissive:selectedWall?0x0b2e55:0
+    });
+    const mesh=new THREE.Mesh(geo,mat);
+    mesh.userData={kind:'obstacle',id:o.id};
+    g.add(mesh);
+
+    const edge=new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo,25),
+      new THREE.LineBasicMaterial({color:selectedWall?0xffffff:0xdbeafe,transparent:true,opacity:.48})
+    );
+    edge.userData={kind:'obstacle',id:o.id};
+    g.add(edge);
+    return g;
+  }
+
+  g.position.set(o.x||0,0,o.z||0);
+  g.rotation.y=THREE.MathUtils.degToRad(-(o.angle||0));
+  const mat=new THREE.MeshStandardMaterial({
+    color:obstacleColor(o.type),
+    transparent:true,
+    opacity:o.hidden?.18:.82,
+    roughness:.72
+  });
+  let mesh;
+
+  if(o.type==='wall'){
+    mesh=new THREE.Mesh(
+      new THREE.BoxGeometry(Number(o.length||8),Number(o.height||2.8),Number(o.thickness||.18)),
+      mat
+    );
+    mesh.position.y=Number(o.height||2.8)/2;
+  }else if(o.type==='column'){
+    mesh=new THREE.Mesh(
+      new THREE.BoxGeometry(Number(o.width||.8),Number(o.height||2.8),Number(o.depth||.8)),
+      mat
+    );
+    mesh.position.y=Number(o.height||2.8)/2;
+  }else if(o.type==='car'){
+    mesh=new THREE.Mesh(new THREE.BoxGeometry(1.8,.85,4.2),mat);
+    mesh.position.y=.65;
+    const cabin=new THREE.Mesh(
+      new THREE.BoxGeometry(1.55,.62,2),
+      new THREE.MeshStandardMaterial({color:0xcbd5e1,transparent:true,opacity:.78})
+    );
+    cabin.position.set(0,1.15,-.1);
+    cabin.userData={kind:'obstacle',id:o.id};
+    g.add(cabin);
+  }else if(o.type==='motorcycle'){
+    mesh=new THREE.Mesh(new THREE.BoxGeometry(.55,.65,1.8),mat);
+    mesh.position.y=.45;
+  }else{
+    const w=Number(o.width||2.5),d=Number(o.depth||5);
+    const pts=[
+      new THREE.Vector3(-w/2,.03,-d/2),
+      new THREE.Vector3(w/2,.03,-d/2),
+      new THREE.Vector3(w/2,.03,d/2),
+      new THREE.Vector3(-w/2,.03,d/2),
+      new THREE.Vector3(-w/2,.03,-d/2)
+    ];
+    const line=new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({color:0xf8fafc,transparent:true,opacity:.8})
+    );
+    line.userData={kind:'obstacle',id:o.id};
+    g.add(line);
+    return g;
+  }
+
+  mesh.userData={kind:'obstacle',id:o.id};
+  g.add(mesh);
+  return g;
 }
 function raySeg(origin,dir,a,b){const rx=dir.x,rz=dir.z,sx=b.x-a.x,sz=b.z-a.z,qx=a.x-origin.x,qz=a.z-origin.z,den=rx*sz-rz*sx;if(Math.abs(den)<1e-7)return null;const t=(qx*sz-qz*sx)/den,u=(qx*rz-qz*rx)/den;return t>=0&&u>=0&&u<=1?t:null}
-function obstacleSegments(){const out=[];(currentScene?.obstacles||[]).forEach(o=>{if(o.hidden||o.occludes===false||o.type==='parking')return;const rad=THREE.MathUtils.degToRad(Number(o.angle||0)),c=Math.cos(rad),s=Math.sin(rad),tr=(x,z)=>({x:(o.x||0)+x*c-z*s,z:(o.z||0)+x*s+z*c});let hw=.4,hd=.4;if(o.type==='wall'){hw=Number(o.length||8)/2;hd=Number(o.thickness||.18)/2}else if(o.type==='column'){hw=Number(o.width||.8)/2;hd=Number(o.depth||.8)/2}else if(o.type==='car'){hw=.9;hd=2.1}else if(o.type==='motorcycle'){hw=.35;hd=.95}const p=[tr(-hw,-hd),tr(hw,-hd),tr(hw,hd),tr(-hw,hd)];for(let i=0;i<4;i++)out.push([p[i],p[(i+1)%4]])});return out}
+function obstacleSegments(){
+  const out=[];
+  (currentScene?.obstacles||[]).forEach(o=>{
+    if(o.hidden||o.occludes===false||o.type==='parking')return;
+
+    if(o.type==='wallpath'){
+      const pts=o.points||[];
+      const count=o.closed?pts.length:pts.length-1;
+      for(let i=0;i<count;i++){
+        const a=pts[i],b=pts[(i+1)%pts.length];
+        if(a&&b)out.push([{x:a.x,z:a.z},{x:b.x,z:b.z}]);
+      }
+      return;
+    }
+
+    const rad=THREE.MathUtils.degToRad(Number(o.angle||0));
+    const c=Math.cos(rad),s=Math.sin(rad);
+    const tr=(x,z)=>({x:(o.x||0)+x*c-z*s,z:(o.z||0)+x*s+z*c});
+    let hw=.4,hd=.4;
+
+    if(o.type==='wall'){hw=Number(o.length||8)/2;hd=Number(o.thickness||.18)/2}
+    else if(o.type==='column'){hw=Number(o.width||.8)/2;hd=Number(o.depth||.8)/2}
+    else if(o.type==='car'){hw=.9;hd=2.1}
+    else if(o.type==='motorcycle'){hw=.35;hd=.95}
+
+    const p=[tr(-hw,-hd),tr(hw,-hd),tr(hw,hd),tr(-hw,hd)];
+    for(let i=0;i<4;i++)out.push([p[i],p[(i+1)%4]]);
+  });
+  return out;
+}
 function cameraCoverage(c){const pre=LENS[String(c.lens)]||LENS['2.8'],range=Number(c.range||pre.range),fov=THREE.MathUtils.degToRad(pre.fov),yaw=THREE.MathUtils.degToRad(Number(c.yaw||0)),segs=obstacleSegments(),shape=new THREE.Shape();shape.moveTo(0,0);const samples=40;for(let i=0;i<=samples;i++){const off=-fov/2+fov*i/samples,ang=yaw+off,dir={x:Math.sin(ang),z:-Math.cos(ang)};let d=range;for(const [a,b] of segs){const t=raySeg({x:c.x||0,z:c.z||0},dir,a,b);if(t!==null&&t<d)d=t}shape.lineTo(dir.x*d,dir.z*d)}shape.closePath();const mesh=new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:COLORS[c.status]||COLORS.existing,transparent:true,opacity:.18,side:THREE.DoubleSide,depthWrite:false}));mesh.position.set(c.x||0,.055,c.z||0);mesh.userData={kind:'camera-coverage',id:c.id};return mesh}
-function makeCamera(c){const g=new THREE.Group();g.position.set(c.x||0,1.4,c.z||0);g.rotation.y=THREE.MathUtils.degToRad(-(c.yaw||0));g.userData={kind:'camera',id:c.id};const color=COLORS[c.status]||COLORS.existing;const b=new THREE.Mesh(new THREE.BoxGeometry(1.2,.65,.8),new THREE.MeshStandardMaterial({color}));b.position.y=.35;b.userData={kind:'camera',id:c.id};g.add(b);const lens=new THREE.Mesh(new THREE.CylinderGeometry(.22,.22,.45,20),new THREE.MeshStandardMaterial({color:0x111827}));lens.rotation.x=Math.PI/2;lens.position.set(0,.35,-.58);lens.userData={kind:'camera',id:c.id};g.add(lens);return g}
+function makeCamera(c){
+  const isSelected=selected.kind==='camera'&&selected.id===c.id;
+  const color=COLORS[c.status]||COLORS.existing;
+  const g=new THREE.Group();
+  g.position.set(c.x||0,0,c.z||0);
+  g.rotation.y=-THREE.MathUtils.degToRad(Number(c.yaw||0));
+  g.userData={kind:'camera',id:c.id};
+
+  // V2.6：恢復舊版較完整的監視器模組外觀：機身 + 鏡頭 + 支柱 + 底座。
+  const body=new THREE.Mesh(
+    new THREE.BoxGeometry(1.8,.8,.9),
+    new THREE.MeshStandardMaterial({
+      color:isSelected?0xf8fafc:color,
+      metalness:.25,
+      roughness:.42,
+      emissive:isSelected?0x334155:0
+    })
+  );
+  body.position.set(0,2.6,0);
+  body.userData=g.userData;
+  g.add(body);
+
+  // 鏡頭朝 local -Z，與目前 FOV 方向一致。
+  const lens=new THREE.Mesh(
+    new THREE.CylinderGeometry(.28,.28,.38,20),
+    new THREE.MeshStandardMaterial({
+      color:0x0f172a,
+      metalness:.65,
+      roughness:.22
+    })
+  );
+  lens.rotation.x=Math.PI/2;
+  lens.position.set(0,2.6,-.62);
+  lens.userData=g.userData;
+  g.add(lens);
+
+  const lensGlass=new THREE.Mesh(
+    new THREE.CircleGeometry(.20,20),
+    new THREE.MeshStandardMaterial({
+      color:0x38bdf8,
+      emissive:0x082f49,
+      metalness:.15,
+      roughness:.16
+    })
+  );
+  lensGlass.position.set(0,2.6,-.82);
+  lensGlass.rotation.x=-Math.PI/2;
+  lensGlass.userData=g.userData;
+  g.add(lensGlass);
+
+  const pole=new THREE.Mesh(
+    new THREE.CylinderGeometry(.09,.09,2.2,12),
+    new THREE.MeshStandardMaterial({color:isSelected?0xe2e8f0:color,metalness:.18,roughness:.55})
+  );
+  pole.position.y=1.45;
+  pole.userData=g.userData;
+  g.add(pole);
+
+  const ring=new THREE.Mesh(
+    new THREE.CylinderGeometry(.55,.65,.12,18),
+    new THREE.MeshStandardMaterial({color:isSelected?0xffffff:color,metalness:.15,roughness:.5})
+  );
+  ring.position.y=.06;
+  ring.userData=g.userData;
+  g.add(ring);
+
+  return g;
+}
 function makeMark(m){const g=new THREE.Group();g.position.set(m.x||0,.2,m.z||0);g.userData={kind:'mark',id:m.id};const a=new THREE.Mesh(new THREE.CylinderGeometry(.6,.6,.15,24),new THREE.MeshStandardMaterial({color:0xfacc15}));a.userData={kind:'mark',id:m.id};g.add(a);const s=new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,2.6,12),new THREE.MeshStandardMaterial({color:0xfacc15}));s.position.y=1.35;s.userData={kind:'mark',id:m.id};g.add(s);return g}
-function renderObjects(){clearGroup(environmentRoot);clearGroup(cameraRoot);clearGroup(markRoot);if(!currentScene)return;currentScene.obstacles=currentScene.obstacles||[];currentScene.cameras=currentScene.cameras||[];currentScene.marks=currentScene.marks||[];currentScene.obstacles.forEach(o=>environmentRoot.add(makeObstacle(o)));currentScene.cameras.forEach(c=>{cameraRoot.add(makeCamera(c));if(c.showFov!==false)cameraRoot.add(cameraCoverage(c))});currentScene.marks.forEach(m=>markRoot.add(makeMark(m)));refreshCounts()}
+function renderObjects(){clearGroup(environmentRoot);clearGroup(cameraRoot);clearGroup(markRoot);if(!currentScene){renderWallDraft();return}currentScene.obstacles=currentScene.obstacles||[];currentScene.cameras=currentScene.cameras||[];currentScene.marks=currentScene.marks||[];currentScene.obstacles.forEach(o=>environmentRoot.add(makeObstacle(o)));currentScene.cameras.forEach(c=>{cameraRoot.add(makeCamera(c));if(c.showFov!==false)cameraRoot.add(cameraCoverage(c))});currentScene.marks.forEach(m=>markRoot.add(makeMark(m)));refreshCounts();renderWallDraft()}
 function buildScene(){buildFloor();renderObjects();resize();if(currentScene?.plan)resetView()}
 function planePoint(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);const p=new THREE.Vector3();return raycaster.ray.intersectPlane(dragPlane,p)?p:null}
 function hit(e){const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera3d);for(const h of raycaster.intersectObjects([environmentRoot,cameraRoot,markRoot],true)){let o=h.object;while(o&&!o.userData?.kind)o=o.parent;if(o?.userData?.kind&&o.userData.kind!=='camera-coverage')return o.userData}return null}
 function addObstacle(type,x,z){currentScene.obstacles=currentScene.obstacles||[];const n=currentScene.obstacles.filter(o=>o.type===type).length+1,labels={wall:'牆體',column:'柱子',car:'汽車',motorcycle:'機車',parking:'停車格'},o={id:uid('obs'),type,name:`${labels[type]}-${String(n).padStart(2,'0')}`,x,z,angle:0,fixed:false,hidden:false,occludes:type!=='parking',length:8,height:2.8,thickness:.18,width:type==='parking'?2.5:.8,depth:type==='parking'?5:.8};currentScene.obstacles.push(o);selected={kind:'obstacle',id:o.id};renderObjects();showProperties();saveProject(false)}
-renderer.domElement.addEventListener('pointerdown',e=>{if(!currentScene?.plan)return;const p=planePoint(e);if(!p)return;if(mode==='add-wall'){addObstacle('wall',p.x,p.z);setMode('select');return}if(mode==='add-column'){addObstacle('column',p.x,p.z);setMode('select');return}if(mode==='add-car'){addObstacle('car',p.x,p.z);setMode('select');return}if(mode==='add-motorcycle'){addObstacle('motorcycle',p.x,p.z);setMode('select');return}if(mode==='add-parking'){addObstacle('parking',p.x,p.z);setMode('select');return}if(mode==='add-camera'){addCamera(p.x,p.z);setMode('select');return}if(mode==='add-mark'){addMark(p.x,p.z);setMode('select');return}const h=hit(e);if(!h){selected={kind:null,id:null};showProperties();return}selected={kind:h.kind,id:h.id};showProperties();const obj=h.kind==='camera'?currentScene.cameras.find(x=>x.id===h.id):h.kind==='mark'?currentScene.marks.find(x=>x.id===h.id):currentScene.obstacles.find(x=>x.id===h.id);if((h.kind==='camera'||h.kind==='obstacle')&&obj?.fixed)return;drag=h;controls.enabled=false});
-renderer.domElement.addEventListener('pointermove',e=>{if(!drag||!currentScene)return;const p=planePoint(e);if(!p)return;const a=drag.kind==='camera'?currentScene.cameras:drag.kind==='mark'?currentScene.marks:currentScene.obstacles,o=a.find(x=>x.id===drag.id);if(o){o.x=p.x;o.z=p.z;renderObjects()}});
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(!currentScene?.plan)return;
+  const p=planePoint(e);
+  if(!p)return;
+
+  if(mode==='add-wall'){
+    // 已有三個以上節點，點回第一點（螢幕距離 20px 內）即封閉並完成。
+    if(draftWall.points.length>=3&&screenDistanceToWorldPoint(e,draftWall.points[0])<=20){
+      finishWall(true);
+      return;
+    }
+    draftWall.points.push({x:+p.x.toFixed(3),z:+p.z.toFixed(3)});
+    draftWall.mousePoint={x:+p.x.toFixed(3),z:+p.z.toFixed(3)};
+    renderWallDraft();
+    return;
+  }
+
+  if(mode==='add-column'){addObstacle('column',p.x,p.z);setMode('select');return}
+  if(mode==='add-car'){addObstacle('car',p.x,p.z);setMode('select');return}
+  if(mode==='add-motorcycle'){addObstacle('motorcycle',p.x,p.z);setMode('select');return}
+  if(mode==='add-parking'){addObstacle('parking',p.x,p.z);setMode('select');return}
+  if(mode==='add-camera'){addCamera(p.x,p.z);setMode('select');return}
+  if(mode==='add-mark'){addMark(p.x,p.z);setMode('select');return}
+
+  const h=hit(e);
+  if(!h){
+    selected={kind:null,id:null};
+    showProperties();
+    renderObjects();
+    return;
+  }
+
+  selected={kind:h.kind,id:h.id};
+  showProperties();
+  renderObjects();
+
+  const obj=
+    h.kind==='camera'?currentScene.cameras.find(x=>x.id===h.id):
+    h.kind==='mark'?currentScene.marks.find(x=>x.id===h.id):
+    currentScene.obstacles.find(x=>x.id===h.id);
+
+  if((h.kind==='camera'||h.kind==='obstacle')&&obj?.fixed)return;
+  drag={...h,last:{x:p.x,z:p.z}};
+  controls.enabled=false;
+});
+renderer.domElement.addEventListener('pointermove',e=>{
+  const p=planePoint(e);
+
+  if(mode==='add-wall'&&draftWall.points.length){
+    if(p){
+      draftWall.mousePoint={x:+p.x.toFixed(3),z:+p.z.toFixed(3)};
+      renderWallDraft();
+    }
+    return;
+  }
+
+  if(!drag||!currentScene||!p)return;
+
+  const arr=
+    drag.kind==='camera'?currentScene.cameras:
+    drag.kind==='mark'?currentScene.marks:
+    currentScene.obstacles;
+
+  const o=arr.find(x=>x.id===drag.id);
+  if(!o)return;
+
+  if(o.type==='wallpath'&&Array.isArray(o.points)){
+    const dx=p.x-drag.last.x,dz=p.z-drag.last.z;
+    o.points=o.points.map(pt=>({
+      x:+(pt.x+dx).toFixed(3),
+      z:+(pt.z+dz).toFixed(3)
+    }));
+    drag.last={x:p.x,z:p.z};
+  }else{
+    o.x=p.x;
+    o.z=p.z;
+    drag.last={x:p.x,z:p.z};
+  }
+
+  renderObjects();
+});
 renderer.domElement.addEventListener('pointerup',()=>{if(drag){drag=null;controls.enabled=true;saveProject(false)}});
+
+window.addEventListener('keydown',e=>{
+  if(mode!=='add-wall')return;
+
+  if(e.key==='Enter'){
+    e.preventDefault();
+    finishWall(false);
+  }else if(e.key==='Escape'){
+    e.preventDefault();
+    draftWall={points:[],mousePoint:null};
+    setMode('select');
+    renderWallDraft();
+    toast('已取消牆體繪製');
+  }
+});
+
 
 function newProject(data){return{id:uid('project'),name:data.name,siteType:data.siteType,address:data.address||'',note:data.note||'',createdAt:now(),updatedAt:now(),version:APP_VERSION,scenes:[]}}
 function newScene(type,name){return{id:uid('scene'),type,name:name||type,plan:null,cameras:[],marks:[],obstacles:[]}}
@@ -532,16 +955,16 @@ async function goHome(){if(currentProject)await saveProject(false);currentProjec
 function renderSceneTree(){const el=$('sceneTree');if(!currentProject?.scenes?.length){el.innerHTML='<div class="empty-card" style="padding:18px">尚未建立樓層</div>';return}el.innerHTML=currentProject.scenes.map(s=>`<div class="scene-item ${currentScene?.id===s.id?'active':''}" data-id="${s.id}"><div class="scene-icon">${esc(s.type)}</div><div class="scene-text"><strong>${esc(s.name)}</strong><small>${s.plan?esc(s.plan.fileName):'尚未匯入圖面'}</small></div><span class="dot ${s.plan?'ready':''}"></span></div>`).join('');el.querySelectorAll('.scene-item').forEach(x=>x.onclick=()=>{currentScene=currentProject.scenes.find(s=>s.id===x.dataset.id);selected={kind:null,id:null};refreshEditor()})}
 function refreshCounts(){if(!currentProject)return;const tc=currentProject.scenes.reduce((n,s)=>n+(s.cameras?.length||0),0),tm=currentProject.scenes.reduce((n,s)=>n+(s.marks?.length||0),0);$('sceneCount').textContent=currentProject.scenes.length;$('projectCameraCount').textContent=tc;$('projectMarkCount').textContent=tm;$('sceneCameraCount').textContent=currentScene?.cameras?.length||0;$('sceneMarkCount').textContent=currentScene?.marks?.length||0;$('sceneObstacleCount').textContent=currentScene?.obstacles?.length||0;$('cameraInfo').textContent=`鏡頭：${currentScene?.cameras?.length||0}`;$('planInfo').textContent=`圖面：${currentScene?.plan?.fileName||'—'}`;if($('camCountExisting'))$('camCountExisting').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='existing').length;if($('camCountNew'))$('camCountNew').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='new').length;if($('camCountFault'))$('camCountFault').textContent=(currentScene?.cameras||[]).filter(c=>c.status==='fault').length}
 function refreshEditor(){if(!currentProject)return;$('editorProjectName').textContent=currentProject.name;$('editorSceneName').textContent=currentScene?.name||'尚未建立樓層';$('floorBadge').textContent=currentScene?.type||'—';$('emptyScene').classList.toggle('hidden',!!currentScene);$('emptyPlan').classList.toggle('hidden',!currentScene||!!currentScene.plan);renderSceneTree();refreshCounts();buildScene();showProperties();renderTools('project');if(currentScene){$('sceneNameInput').value=currentScene.name;$('sceneTypeInput').value=FLOORS.includes(currentScene.type)?currentScene.type:'自訂';$('planOpacityInput').value=currentScene.plan?.opacity??1;$('planOpacityOut').textContent=`${Math.round((currentScene.plan?.opacity??1)*100)}%`;$('planRotationInput').value=String(currentScene.plan?.rotation||0)}}
-function showProperties(){['sceneProperties','cameraProperties','markProperties','obstacleProperties'].forEach(id=>$(id)?.classList.add('hidden'));if(selected.kind==='camera'){const c=currentScene?.cameras.find(x=>x.id===selected.id);if(!c)return;$('propertyTitle').textContent='監視器屬性';$('cameraProperties').classList.remove('hidden');$('camName').value=c.name;$('camStatus').value=c.status;$('camLens').value=c.lens;$('camYaw').value=c.yaw;$('camYawOut').textContent=`${c.yaw}°`;$('camRange').value=c.range;$('camRangeOut').textContent=`${c.range}m`;$('camHeight').value=c.height;$('camFixed').checked=!!c.fixed;$('camShowFov').checked=c.showFov!==false;$('camNote').value=c.note||'';return}if(selected.kind==='obstacle'){const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(!o)return;$('propertyTitle').textContent='環境物件屬性';$('obstacleProperties').classList.remove('hidden');$('obsName').value=o.name||'';$('obsType').value=o.type||'wall';$('obsAngle').value=o.angle||0;$('obsLength').value=o.length||8;$('obsWidth').value=o.width||.8;$('obsDepth').value=o.depth||.8;$('obsHeight').value=o.height||2.8;$('obsThickness').value=o.thickness||.18;$('obsOccludes').checked=o.occludes!==false;$('obsFixed').checked=!!o.fixed;$('obsHidden').checked=!!o.hidden;return}if(selected.kind==='mark'){const m=currentScene?.marks.find(x=>x.id===selected.id);if(!m)return;$('propertyTitle').textContent='標記屬性';$('markProperties').classList.remove('hidden');$('markTitle').value=m.title;$('markType').value=m.type;$('markText').value=m.text||'';$('markPublic').checked=m.public!==false;return}$('propertyTitle').textContent='場景屬性';$('sceneProperties').classList.remove('hidden')}
+function showProperties(){['sceneProperties','cameraProperties','markProperties','obstacleProperties'].forEach(id=>$(id)?.classList.add('hidden'));if(selected.kind==='camera'){const c=currentScene?.cameras.find(x=>x.id===selected.id);if(!c)return;$('propertyTitle').textContent='監視器屬性';$('cameraProperties').classList.remove('hidden');$('camName').value=c.name;$('camStatus').value=c.status;$('camLens').value=c.lens;$('camYaw').value=c.yaw;$('camYawOut').textContent=`${c.yaw}°`;$('camRange').value=c.range;$('camRangeOut').textContent=`${c.range}m`;$('camHeight').value=c.height;$('camFixed').checked=!!c.fixed;$('camShowFov').checked=c.showFov!==false;$('camNote').value=c.note||'';return}if(selected.kind==='obstacle'){const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(!o)return;$('propertyTitle').textContent='環境物件屬性';$('obstacleProperties').classList.remove('hidden');$('obsName').value=o.name||'';$('obsType').value=o.type||'wall';$('obsAngle').value=o.angle||0;$('obsLength').value=o.type==='wallpath'?wallPathLength(o).toFixed(2):(o.length||8);$('obsWidth').value=o.width||.8;$('obsDepth').value=o.depth||.8;$('obsHeight').value=o.height||2.8;$('obsThickness').value=o.thickness||.18;$('obsOccludes').checked=o.occludes!==false;$('obsFixed').checked=!!o.fixed;$('obsHidden').checked=!!o.hidden;$('obsAngle').disabled=o.type==='wallpath';$('obsLength').disabled=o.type==='wallpath';return}if(selected.kind==='mark'){const m=currentScene?.marks.find(x=>x.id===selected.id);if(!m)return;$('propertyTitle').textContent='標記屬性';$('markProperties').classList.remove('hidden');$('markTitle').value=m.title;$('markType').value=m.type;$('markText').value=m.text||'';$('markPublic').checked=m.public!==false;return}$('obsAngle').disabled=false;$('obsLength').disabled=false;$('propertyTitle').textContent='場景屬性';$('sceneProperties').classList.remove('hidden')}
 function addCamera(x,z){const n=currentScene.cameras.length+1,c={id:uid('cam'),name:`CAM-${currentScene.type}-${String(n).padStart(2,'0')}`,x,z,yaw:0,height:2.8,lens:'2.8',range:14,status:'existing',fixed:false,showFov:true,note:''};currentScene.cameras.push(c);selected={kind:'camera',id:c.id};renderObjects();showProperties();saveProject(false)}
 function addMark(x,z){const n=currentScene.marks.length+1,m={id:uid('mark'),title:`標記-${String(n).padStart(2,'0')}`,type:'note',text:'',public:true,x,z};currentScene.marks.push(m);selected={kind:'mark',id:m.id};renderObjects();showProperties();saveProject(false)}
-function setMode(m){mode=m;const map={'add-camera':'請在平面圖上點選「監視器安裝位置」','add-mark':'請在平面圖上點選「標記位置」','add-wall':'請點選牆體位置；新增後可在右側調整長度與角度','add-column':'請點選柱子位置','add-car':'請點選汽車位置','add-motorcycle':'請點選機車位置','add-parking':'請點選停車格位置'};const text=map[m]||'';$('modeHint').textContent=text;$('modeHint').classList.toggle('hidden',!text)}
+function setMode(m){const prev=mode;mode=m;if(prev==='add-wall'&&m!=='add-wall'&&draftWall.points.length===0)draftWall={points:[],mousePoint:null};const map={'add-camera':'請在平面圖上點選「監視器安裝位置」','add-mark':'請在平面圖上點選「標記位置」','add-wall':'連續牆體：依序點選路徑；點回第一點自動封閉完成；Enter 結束開放牆；Esc 取消','add-column':'請點選柱子位置','add-car':'請點選汽車位置','add-motorcycle':'請點選機車位置','add-parking':'請點選停車格位置'};const text=map[m]||'';$('modeHint').textContent=text;$('modeHint').classList.toggle('hidden',!text);controls.enabled=m==='select'&&!drag;renderWallDraft()}
 
 function syncCam(){const c=currentScene?.cameras.find(x=>x.id===selected.id);if(!c)return;const prevLens=c.lens;c.name=$('camName').value||c.name;c.status=$('camStatus').value;c.lens=$('camLens').value;c.yaw=+$('camYaw').value;c.range=+$('camRange').value;c.height=+$('camHeight').value||2.8;c.fixed=$('camFixed').checked;c.showFov=$('camShowFov').checked;c.note=$('camNote').value;if(prevLens!==c.lens){const p=LENS[c.lens]||LENS['2.8'];c.range=p.range;$('camRange').value=p.range}$('camYawOut').textContent=`${c.yaw}°`;$('camRangeOut').textContent=`${c.range}m`;renderObjects()}
 ['camName','camStatus','camLens','camYaw','camRange','camHeight','camFixed','camShowFov','camNote'].forEach(id=>{$(id).addEventListener('input',syncCam);$(id).addEventListener('change',syncCam)});
 function syncMark(){const m=currentScene?.marks.find(x=>x.id===selected.id);if(!m)return;m.title=$('markTitle').value||m.title;m.type=$('markType').value;m.text=$('markText').value;m.public=$('markPublic').checked}
 ['markTitle','markType','markText','markPublic'].forEach(id=>{$(id).addEventListener('input',syncMark);$(id).addEventListener('change',syncMark)});
-function syncObstacle(){const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(!o)return;o.name=$('obsName').value||o.name;o.type=$('obsType').value;o.angle=+$('obsAngle').value||0;o.length=+$('obsLength').value||8;o.width=+$('obsWidth').value||.8;o.depth=+$('obsDepth').value||.8;o.height=+$('obsHeight').value||2.8;o.thickness=+$('obsThickness').value||.18;o.occludes=$('obsOccludes').checked;o.fixed=$('obsFixed').checked;o.hidden=$('obsHidden').checked;renderObjects()}
+function syncObstacle(){const o=currentScene?.obstacles?.find(x=>x.id===selected.id);if(!o)return;o.name=$('obsName').value||o.name;if(o.type!=='wallpath'){o.type=$('obsType').value;o.angle=+$('obsAngle').value||0;o.length=+$('obsLength').value||8}o.width=+$('obsWidth').value||.8;o.depth=+$('obsDepth').value||.8;o.height=+$('obsHeight').value||2.8;o.thickness=+$('obsThickness').value||.18;o.occludes=$('obsOccludes').checked;o.fixed=$('obsFixed').checked;o.hidden=$('obsHidden').checked;if(o.type==='wallpath')o.length=+wallPathLength(o).toFixed(2);renderObjects()}
 ['obsName','obsType','obsAngle','obsLength','obsWidth','obsDepth','obsHeight','obsThickness','obsOccludes','obsFixed','obsHidden'].forEach(id=>{$(id).addEventListener('input',syncObstacle);$(id).addEventListener('change',syncObstacle)});
 
 async function imageToData(file){return new Promise((resolve,reject)=>{const fr=new FileReader();fr.onload=()=>{const img=new Image();img.onload=()=>{const max=2200,s=Math.min(1,max/img.width),c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);resolve({dataUrl:c.toDataURL('image/jpeg',.9),width:c.width,height:c.height})};img.onerror=reject;img.src=fr.result};fr.onerror=reject;fr.readAsDataURL(file)})}
@@ -552,7 +975,7 @@ async function importPlan(file){if(!currentScene)return;if(/\.dwg$/i.test(file.n
 $('planFileInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{await importPlan(f)}catch(err){alert(err.message)}e.target.value=''};$('choosePlanBtn').onclick=()=>$('planFileInput').click();$('replacePlanBtn').onclick=()=>$('planFileInput').click();$('removePlanBtn').onclick=async()=>{if(!currentScene?.plan)return;if(confirm('移除此樓層圖面？')){currentScene.plan=null;await saveProject(false);refreshEditor()}};const dz=$('dropZone');['dragenter','dragover'].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.add('dragover')}));['dragleave','drop'].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.remove('dragover')}));dz.addEventListener('drop',e=>{const f=e.dataTransfer.files?.[0];if(f)importPlan(f)});
 
 function renderTools(menu){const data={project:[['儲存專案','save'],['匯出專案','export'],['新增樓層','new-scene']],plan:[['匯入 / 更換圖面','plan'],['透明度 100%','op1'],['透明度 50%','op5']],environment:[['＋ 牆體','add-wall'],['＋ 柱子','add-column'],['＋ 汽車','add-car'],['＋ 機車','add-motorcycle'],['＋ 停車格','add-parking']],camera:[['＋ 新增監視器','add-camera'],['顯示全部視野','show'],['隱藏全部視野','hide'],['全部設為原建置','cams-existing'],['全部設為增設','cams-new']],mark:[['＋ 新增標記','add-mark']],measure:[['兩點實尺校正（下一階段）','todo']],view:[['3D','3d'],['俯視','top'],['重設視角','reset'],['專注模式','focus']],report:[['輸出鏡頭配置報告（下一階段）','todo']]};$('toolShelf').innerHTML=`<span class="tool-label">${menu.toUpperCase()}</span>`+(data[menu]||[]).map(([x,a])=>`<button data-act="${a}">${x}</button>`).join('');$('toolShelf').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>runTool(b.dataset.act))}
-function runTool(a){if(a==='save')return saveProject();if(a==='export')return exportProject();if(a==='new-scene')return openSceneModal();if(a==='plan')return $('planFileInput').click();if(a==='op1'&&currentScene?.plan){currentScene.plan.opacity=1;buildFloor()}else if(a==='op5'&&currentScene?.plan){currentScene.plan.opacity=.5;buildFloor()}else if(a==='add-wall')setMode('add-wall');else if(a==='add-column')setMode('add-column');else if(a==='add-car')setMode('add-car');else if(a==='add-motorcycle')setMode('add-motorcycle');else if(a==='add-parking')setMode('add-parking');else if(a==='add-camera')setMode('add-camera');else if(a==='add-mark')setMode('add-mark');else if(a==='show'){currentScene.cameras.forEach(c=>c.showFov=true);renderObjects()}else if(a==='hide'){currentScene.cameras.forEach(c=>c.showFov=false);renderObjects()}else if(a==='cams-existing'){currentScene.cameras.forEach(c=>c.status='existing');renderObjects()}else if(a==='cams-new'){currentScene.cameras.forEach(c=>c.status='new');renderObjects()}else if(a==='3d')resetView();else if(a==='top')topView();else if(a==='reset')resetView();else if(a==='focus')toggleFocus();else toast('此功能排在下一階段加入')}
+function runTool(a){if(a==='save')return saveProject();if(a==='export')return exportProject();if(a==='new-scene')return openSceneModal();if(a==='plan')return $('planFileInput').click();if(a==='op1'&&currentScene?.plan){currentScene.plan.opacity=1;buildFloor()}else if(a==='op5'&&currentScene?.plan){currentScene.plan.opacity=.5;buildFloor()}else if(a==='add-wall'){draftWall={points:[],mousePoint:null};setMode('add-wall');}else if(a==='add-column')setMode('add-column');else if(a==='add-car')setMode('add-car');else if(a==='add-motorcycle')setMode('add-motorcycle');else if(a==='add-parking')setMode('add-parking');else if(a==='add-camera')setMode('add-camera');else if(a==='add-mark')setMode('add-mark');else if(a==='show'){currentScene.cameras.forEach(c=>c.showFov=true);renderObjects()}else if(a==='hide'){currentScene.cameras.forEach(c=>c.showFov=false);renderObjects()}else if(a==='cams-existing'){currentScene.cameras.forEach(c=>c.status='existing');renderObjects()}else if(a==='cams-new'){currentScene.cameras.forEach(c=>c.status='new');renderObjects()}else if(a==='3d')resetView();else if(a==='top')topView();else if(a==='reset')resetView();else if(a==='focus')toggleFocus();else toast('此功能排在下一階段加入')}
 document.querySelectorAll('.main-menu button').forEach(b=>b.onclick=()=>renderTools(b.dataset.menu));
 
 function applyPanels(){const g=$('editorGrid');g.classList.toggle('left-collapsed',!!uiState.leftCollapsed);g.classList.toggle('right-collapsed',!!uiState.rightCollapsed);$('expandLeftBtn').classList.toggle('hidden',!uiState.leftCollapsed);$('expandRightBtn').classList.toggle('hidden',!uiState.rightCollapsed);requestAnimationFrame(resize)}
