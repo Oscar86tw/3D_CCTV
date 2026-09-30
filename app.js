@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.14';
+import { APP_CONFIG } from './config.js?v=2.15';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v214-api-url';
+const API_CACHE_KEY='utop-cctv-v215-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.14'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.14`);
+    if(apiVersion!=='2.15'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.15`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -806,14 +806,14 @@ function cameraCoverage(c){
   const fov=THREE.MathUtils.degToRad(pre.fov);
   const pose=getCameraPose(c);
 
-  // V2.13：每支鏡頭只保留一個完整扇形視野，不再額外疊加第二組線框。
+  // V2.15：扇形視野角度再反轉 180°，讓光線方向與目前鏡頭正面完全一致。
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
   const samples=72;
   for(let i=0;i<=samples;i++){
     const off=-fov/2+fov*i/samples;
-    const px=Math.sin(off)*range;
-    const pz=-Math.cos(off)*range;
+    const px=-Math.sin(off)*range;
+    const pz=Math.cos(off)*range;
     shape.lineTo(px,pz);
   }
   shape.closePath();
