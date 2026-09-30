@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>昱拓弱電｜3D CCTV 編輯器 V2.4</title>
-  <link rel="stylesheet" href="styles.css?v=2.4">
+  <title>昱拓弱電｜3D CCTV 編輯器 V2.5</title>
+  <link rel="stylesheet" href="styles.css?v=2.5">
 </head>
 <body>
 <section id="projectHome" class="project-home">
@@ -14,7 +14,7 @@
       <h1>3D CCTV 專案中心</h1>
       <p>先建立社區專案，再建立樓層／場景、匯入平面圖，最後進行 CCTV 3D 配置。</p>
     </div>
-    <span class="version">V2.4</span>
+    <span class="version">V2.5</span>
   </header>
   <div class="home-actions">
     <button id="newProjectBtn" class="primary big">＋ 建立新專案</button>
@@ -52,7 +52,7 @@
       <button data-menu="view">視角</button>
       <button data-menu="report">報告</button>
     </nav>
-    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.4</span></div>
+    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.5</span></div>
   </header>
 
   <div id="editorGrid" class="editor-grid">
@@ -98,6 +98,7 @@
         <div class="stats"><div><span>鏡頭</span><b id="sceneCameraCount">0</b></div><div><span>標記</span><b id="sceneMarkCount">0</b></div><div><span>遮擋物</span><b id="sceneObstacleCount">0</b></div></div>
       </div>
       <div id="cameraProperties" class="property-pane hidden">
+        <div id="cameraLegend" class="camera-legend"><span><i class="dot red"></i>原建置 <b id="camCountExisting">0</b></span><span><i class="dot yellow"></i>增設 <b id="camCountNew">0</b></span><span><i class="dot orange"></i>故障 <b id="camCountFault">0</b></span></div>
         <label>鏡頭名稱<input id="camName" type="text"></label>
         <div class="two"><label>狀態<select id="camStatus"><option value="existing">原建置</option><option value="new">增設</option><option value="fault">故障</option></select></label><label>焦段<select id="camLens"><option value="2.8">2.8 mm</option><option value="3.6">3.6 mm</option><option value="4">4 mm</option><option value="6">6 mm</option><option value="8">8 mm</option></select></label></div>
         <label>方向<input id="camYaw" type="range" min="0" max="359"><output id="camYawOut">0°</output></label>
@@ -107,6 +108,17 @@
         <label class="check"><input id="camShowFov" type="checkbox" checked>顯示視野</label>
         <label>備註<textarea id="camNote" rows="4"></textarea></label>
         <button id="deleteCameraBtn" class="danger">刪除鏡頭</button>
+      </div>
+      <div id="obstacleProperties" class="property-pane hidden">
+        <label>環境物件名稱<input id="obsName" type="text"></label>
+        <div class="two"><label>類型<select id="obsType"><option value="wall">牆體</option><option value="column">柱子</option><option value="car">汽車</option><option value="motorcycle">機車</option><option value="parking">停車格</option></select></label><label>角度<input id="obsAngle" type="number" min="0" max="359" step="1"></label></div>
+        <label>長度（m）<input id="obsLength" type="number" min="0.5" max="50" step="0.1"></label>
+        <div class="two"><label>寬度（m）<input id="obsWidth" type="number" min="0.2" max="10" step="0.1"></label><label>深度（m）<input id="obsDepth" type="number" min="0.2" max="15" step="0.1"></label></div>
+        <div class="two"><label>高度（m）<input id="obsHeight" type="number" min="0.2" max="10" step="0.1"></label><label>厚度（m）<input id="obsThickness" type="number" min="0.05" max="2" step="0.05"></label></div>
+        <label class="check"><input id="obsOccludes" type="checkbox" checked>遮擋監視器視野</label>
+        <label class="check"><input id="obsFixed" type="checkbox">固定位置</label>
+        <label class="check"><input id="obsHidden" type="checkbox">隱藏</label>
+        <button id="deleteObstacleBtn" class="danger">刪除環境物件</button>
       </div>
       <div id="markProperties" class="property-pane hidden">
         <label>標記名稱<input id="markTitle" type="text"></label>
@@ -156,6 +168,6 @@
 
 <div id="toast" class="toast hidden"></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
-<script type="module" src="app.js?v=2.4"></script>
+<script type="module" src="app.js?v=2.5"></script>
 </body>
 </html>

@@ -58,3 +58,8 @@
 @media(max-width:600px){
   .cloud-load-details{grid-template-columns:1fr}
 }
+
+.camera-legend{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #26384a}
+.camera-legend span{display:flex;align-items:center;gap:5px;border:1px solid #2b4053;background:#0b1721;border-radius:999px;padding:5px 8px;font-size:10px}
+.camera-legend .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.camera-legend .red{background:#dc2626}.camera-legend .yellow{background:#eab308}.camera-legend .orange{background:#f97316}
