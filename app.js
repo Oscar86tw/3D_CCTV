@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.10';
+import { APP_CONFIG } from './config.js?v=2.11';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v210-api-url';
+const API_CACHE_KEY='utop-cctv-v211-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.10'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.10`);
+    if(apiVersion!=='2.11'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.11`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -795,18 +795,17 @@ function cameraCoverage(c){
   const fov=THREE.MathUtils.degToRad(pre.fov);
   const yaw=THREE.MathUtils.degToRad(Number(c.yaw||0));
 
-  // V2.10：視野改為完整扇形，不再因牆、柱、車輛而被切掉。
-  // 視野仍由鏡頭前端開始，保持鏡頭方向與 FOV 一致。
+  // V2.11：視野起點改為鏡頭鏡片前端，與模型完全貼合。
   const origin={
-    x:(c.x||0)+Math.sin(yaw)*0.88,
-    z:(c.z||0)-Math.cos(yaw)*0.88
+    x:(c.x||0)+Math.sin(yaw)*0.965,
+    z:(c.z||0)-Math.cos(yaw)*0.965
   };
 
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
   const boundary=[];
-  const samples=48;
-  let first=null,last=null;
+  const samples=56;
+  let first=null;
 
   for(let i=0;i<=samples;i++){
     const off=-fov/2+fov*i/samples;
@@ -814,7 +813,6 @@ function cameraCoverage(c){
     const px=Math.sin(ang)*range;
     const pz=-Math.cos(ang)*range;
     if(i===0)first={x:px,z:pz};
-    last={x:px,z:pz};
     shape.lineTo(px,pz);
     boundary.push(new THREE.Vector3(px,.068,pz));
   }
@@ -838,19 +836,13 @@ function cameraCoverage(c){
   fill.userData={kind:'camera-coverage',id:c.id};
   group.add(fill);
 
-  // 完整外框：左邊界 → 弧線 → 右邊界 → 回到鏡頭前端。
-  const outlinePts=[
-    new THREE.Vector3(0,.07,0),
-    new THREE.Vector3(first.x,.07,first.z),
-    ...boundary.slice(1),
-    new THREE.Vector3(0,.07,0)
-  ];
+  const outlinePts=[new THREE.Vector3(0,.07,0),new THREE.Vector3(first.x,.07,first.z),...boundary.slice(1),new THREE.Vector3(0,.07,0)];
   const outline=new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(outlinePts),
     new THREE.LineBasicMaterial({
       color:COLORS[c.status]||COLORS.existing,
       transparent:true,
-      opacity:.72,
+      opacity:.78,
       depthTest:false
     })
   );
@@ -929,145 +921,86 @@ function makeNewCameraStar(c){
 }
 
 function makeCamera(c){
-  // 模組本體需與 cameraCoverage() 的視野方向一致。V2.9 將模型相對舊版旋轉 180°。
   const isSelected=selected.kind==='camera'&&selected.id===c.id;
   const color=COLORS[c.status]||COLORS.existing;
   const g=new THREE.Group();
   g.position.set(c.x||0,0,c.z||0);
-  g.rotation.y=Math.PI-THREE.MathUtils.degToRad(Number(c.yaw||0));
+  // V2.11：鏡頭朝向與 FOV 完全一致，local -Z 即為發射方向。
+  g.rotation.y=-THREE.MathUtils.degToRad(Number(c.yaw||0));
   g.userData={kind:'camera',id:c.id};
 
-  const bodyMat=new THREE.MeshStandardMaterial({
-    color:isSelected?0xf8fafc:0xe5e7eb,
-    metalness:.38,
-    roughness:.42,
-    emissive:isSelected?0x334155:0x000000
-  });
-  const hoodMat=new THREE.MeshStandardMaterial({color:isSelected?0xffffff:0xf3f4f6,metalness:.32,roughness:.4});
-  const darkMat=new THREE.MeshStandardMaterial({color:0x262b33,metalness:.46,roughness:.28});
-  const standMat=new THREE.MeshStandardMaterial({color:0x6b7280,metalness:.52,roughness:.38});
-  const accentMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:color,metalness:.2,roughness:.45,emissive:isSelected?0x334155:0});
+  const shellMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:0xe7ebef,metalness:.32,roughness:.46,emissive:isSelected?0x334155:0x000000});
+  const shellDark=new THREE.MeshStandardMaterial({color:0x2b313a,metalness:.42,roughness:.28});
+  const standMat=new THREE.MeshStandardMaterial({color:0x6b7280,metalness:.55,roughness:.34});
+  const accentMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:color,metalness:.22,roughness:.4,emissive:isSelected?0x334155:0});
+  const screwMat=new THREE.MeshStandardMaterial({color:0xdfe4ea,metalness:.86,roughness:.16});
 
-  const body=new THREE.Mesh(new THREE.BoxGeometry(1.95,.72,1.08),bodyMat);
-  body.position.set(0,2.72,0);
-  body.scale.x=1.02;
-  body.userData=g.userData;
-  g.add(body);
+  // 工業型盒式攝影機：上蓋、機身、前框、鏡頭筒、側支架、立柱、底座。
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.82,.82,1.22),shellMat);
+  body.position.set(0,2.7,.02);body.userData=g.userData;g.add(body);
 
-  const hood=new THREE.Mesh(new THREE.BoxGeometry(2.06,.28,1.18),hoodMat);
-  hood.position.set(0,3.01,-.06);
-  hood.scale.set(1.02,1,1);
-  hood.userData=g.userData;
-  g.add(hood);
+  const bodyLower=new THREE.Mesh(new THREE.BoxGeometry(1.68,.22,1.02),shellDark);
+  bodyLower.position.set(0,2.31,.03);bodyLower.userData=g.userData;g.add(bodyLower);
 
-  const topChamfer=new THREE.Mesh(new THREE.BoxGeometry(1.5,.14,.98),hoodMat);
-  topChamfer.position.set(0,2.92,-.22);
-  topChamfer.rotation.x=.18;
-  topChamfer.userData=g.userData;
-  g.add(topChamfer);
+  const hoodTop=new THREE.Mesh(new THREE.BoxGeometry(1.98,.16,1.52),shellMat);
+  hoodTop.position.set(0,3.05,-.12);hoodTop.userData=g.userData;g.add(hoodTop);
 
-  const frontBezel=new THREE.Mesh(new THREE.BoxGeometry(.84,.84,.24),darkMat);
-  frontBezel.position.set(0,2.74,-.57);
-  frontBezel.userData=g.userData;
-  g.add(frontBezel);
+  const hoodFrontLip=new THREE.Mesh(new THREE.BoxGeometry(1.96,.28,.18),shellMat);
+  hoodFrontLip.position.set(0,2.92,-.78);hoodFrontLip.userData=g.userData;g.add(hoodFrontLip);
 
-  const lensShroud=new THREE.Mesh(new THREE.CylinderGeometry(.3,.34,.18,24),darkMat);
-  lensShroud.rotation.x=Math.PI/2;
-  lensShroud.position.set(0,2.74,-.69);
-  lensShroud.userData=g.userData;
-  g.add(lensShroud);
+  const hoodSideL=new THREE.Mesh(new THREE.BoxGeometry(.12,.22,.68),shellMat);
+  hoodSideL.position.set(-.93,2.87,-.42);hoodSideL.userData=g.userData;g.add(hoodSideL);
+  const hoodSideR=hoodSideL.clone();hoodSideR.position.x=.93;hoodSideR.userData=g.userData;g.add(hoodSideR);
 
-  const lens=new THREE.Mesh(
-    new THREE.CylinderGeometry(.22,.24,.16,24),
-    new THREE.MeshStandardMaterial({color:0x0f172a,metalness:.78,roughness:.16})
-  );
-  lens.rotation.x=Math.PI/2;
-  lens.position.set(0,2.74,-.77);
-  lens.userData=g.userData;
-  g.add(lens);
+  const frontFrame=new THREE.Mesh(new THREE.BoxGeometry(.98,.98,.22),shellDark);
+  frontFrame.position.set(0,2.7,-.52);frontFrame.userData=g.userData;g.add(frontFrame);
 
-  const lensGlass=new THREE.Mesh(
-    new THREE.CircleGeometry(.205,24),
-    new THREE.MeshStandardMaterial({color:0x93c5fd,emissive:0x1e3a8a,emissiveIntensity:.25,metalness:.12,roughness:.08,transparent:true,opacity:.95})
-  );
-  lensGlass.position.set(0,2.74,-.86);
-  lensGlass.rotation.x=-Math.PI/2;
-  lensGlass.userData=g.userData;
-  g.add(lensGlass);
+  const lensRing=new THREE.Mesh(new THREE.CylinderGeometry(.33,.36,.22,28),shellDark);
+  lensRing.rotation.x=Math.PI/2;lensRing.position.set(0,2.7,-.68);lensRing.userData=g.userData;g.add(lensRing);
 
-  for(const sx of[-.28,.28]){
-    for(const sy of[-.28,.28]){
-      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.035,.035,.03,12),new THREE.MeshStandardMaterial({color:0xd1d5db,metalness:.75,roughness:.2}));
-      screw.rotation.x=Math.PI/2;
-      screw.position.set(sx,2.74+sy,-.44);
-      screw.userData=g.userData;
-      g.add(screw);
+  const lensBarrel=new THREE.Mesh(new THREE.CylinderGeometry(.23,.26,.26,28),new THREE.MeshStandardMaterial({color:0x111827,metalness:.76,roughness:.12}));
+  lensBarrel.rotation.x=Math.PI/2;lensBarrel.position.set(0,2.7,-.83);lensBarrel.userData=g.userData;g.add(lensBarrel);
+
+  const lensGlass=new THREE.Mesh(new THREE.CircleGeometry(.215,28),new THREE.MeshStandardMaterial({color:0x9fd3ff,emissive:0x1d4ed8,emissiveIntensity:.28,metalness:.12,roughness:.05,transparent:true,opacity:.96}));
+  lensGlass.position.set(0,2.7,-.965);lensGlass.rotation.x=-Math.PI/2;lensGlass.userData=g.userData;g.add(lensGlass);
+
+  const sensorShade=new THREE.Mesh(new THREE.BoxGeometry(.42,.18,.1),shellDark);
+  sensorShade.position.set(0,2.26,-.48);sensorShade.userData=g.userData;g.add(sensorShade);
+
+  const rearCap=new THREE.Mesh(new THREE.BoxGeometry(1.24,.58,.18),shellMat);
+  rearCap.position.set(0,2.73,.68);rearCap.userData=g.userData;g.add(rearCap);
+
+  const sideMountL=new THREE.Mesh(new THREE.BoxGeometry(.16,.66,.24),standMat);
+  sideMountL.position.set(-.58,2.25,.18);sideMountL.rotation.z=.18;sideMountL.userData=g.userData;g.add(sideMountL);
+  const sideMountR=sideMountL.clone();sideMountR.position.x=.58;sideMountR.rotation.z=-.18;sideMountR.userData=g.userData;g.add(sideMountR);
+
+  const pivot=new THREE.Mesh(new THREE.CylinderGeometry(.1,.1,1.12,18),accentMat);
+  pivot.rotation.z=Math.PI/2;pivot.position.set(0,2.08,.18);pivot.userData=g.userData;g.add(pivot);
+
+  const neckA=new THREE.Mesh(new THREE.CylinderGeometry(.1,.13,.34,16),standMat);
+  neckA.position.set(0,1.82,.18);neckA.userData=g.userData;g.add(neckA);
+
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(.14,.14,1.38,18),standMat);
+  pole.position.set(0,1.02,.18);pole.userData=g.userData;g.add(pole);
+
+  const baseCollar=new THREE.Mesh(new THREE.CylinderGeometry(.22,.22,.14,18),accentMat);
+  baseCollar.position.set(0,.27,.18);baseCollar.userData=g.userData;g.add(baseCollar);
+
+  const baseDisc=new THREE.Mesh(new THREE.CylinderGeometry(.58,.62,.16,30),standMat);
+  baseDisc.position.set(0,.08,.18);baseDisc.userData=g.userData;g.add(baseDisc);
+
+  for(const ang of [18,90,162,234,306]){
+    const r=THREE.MathUtils.degToRad(ang);
+    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.042,.042,.05,12),screwMat);
+    bolt.position.set(Math.cos(r)*.38,.15,Math.sin(r)*.38+.18);bolt.userData=g.userData;g.add(bolt);
+  }
+
+  for(const sx of[-.31,.31]){
+    for(const sy of[-.31,.31]){
+      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.034,.034,.03,12),screwMat);
+      screw.rotation.x=Math.PI/2;screw.position.set(sx,2.7+sy,-.41);screw.userData=g.userData;g.add(screw);
     }
   }
-
-  const sideCap=new THREE.Mesh(new THREE.BoxGeometry(.18,.54,.92),bodyMat);
-  sideCap.position.set(0,2.71,.51);
-  sideCap.userData=g.userData;
-  g.add(sideCap);
-
-  const joint=new THREE.Mesh(new THREE.BoxGeometry(.46,.24,.48),standMat);
-  joint.position.set(0,2.3,.08);
-  joint.userData=g.userData;
-  g.add(joint);
-
-  const hingeA=new THREE.Mesh(new THREE.BoxGeometry(.18,.38,.24),standMat);
-  hingeA.position.set(-.18,2.45,.08);
-  hingeA.userData=g.userData;
-  g.add(hingeA);
-
-  const hingeB=hingeA.clone();
-  hingeB.position.x=.18;
-  hingeB.userData=g.userData;
-  g.add(hingeB);
-
-  const hingePin=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,.46,20),accentMat);
-  hingePin.rotation.z=Math.PI/2;
-  hingePin.position.set(0,2.45,.08);
-  hingePin.userData=g.userData;
-  g.add(hingePin);
-
-  const neck=new THREE.Mesh(new THREE.CylinderGeometry(.11,.13,.26,16),standMat);
-  neck.position.set(0,2.05,.08);
-  neck.userData=g.userData;
-  g.add(neck);
-
-  const pole=new THREE.Mesh(new THREE.CylinderGeometry(.14,.14,1.52,16),standMat);
-  pole.position.set(0,1.17,.08);
-  pole.userData=g.userData;
-  g.add(pole);
-
-  const collar=new THREE.Mesh(new THREE.CylinderGeometry(.2,.2,.16,18),accentMat);
-  collar.position.set(0,.47,.08);
-  collar.userData=g.userData;
-  g.add(collar);
-
-  const baseDisc=new THREE.Mesh(new THREE.CylinderGeometry(.55,.58,.14,28),standMat);
-  baseDisc.position.set(0,.07,.08);
-  baseDisc.userData=g.userData;
-  g.add(baseDisc);
-
-  for(const ang of [20,92,164,236,308]){
-    const r=THREE.MathUtils.degToRad(ang);
-    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.045,.045,.05,12),new THREE.MeshStandardMaterial({color:0xe5e7eb,metalness:.85,roughness:.18}));
-    bolt.position.set(Math.cos(r)*.36,.13,Math.sin(r)*.36+.08);
-    bolt.userData=g.userData;
-    g.add(bolt);
-  }
-
-  const ribShape=[-0.26,0,.26];
-  ribShape.forEach((x)=>{
-    const rib=new THREE.Mesh(new THREE.BoxGeometry(.08,.18,.24),standMat);
-    rib.position.set(x,.18,.08);
-    rib.userData=g.userData;
-    g.add(rib);
-  });
-
-  // V2.9：取消鏡頭前方的透明立體光束；僅保留地面 FOV / 遮擋範圍。
 
   return g;
 }
