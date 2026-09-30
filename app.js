@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.15';
+import { APP_CONFIG } from './config.js?v=2.16';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v215-api-url';
+const API_CACHE_KEY='utop-cctv-v216-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.15'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.15`);
+    if(apiVersion!=='2.16'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.16`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -800,20 +800,44 @@ function getCameraPose(c){
   return {yawDeg,yawRad,modelRotationY,mountY,muzzleOffsetZ};
 }
 
+function getCameraOccludedFan(c,range,fov,samples,pose){
+  const segs=obstacleSegments();
+  const theta=pose.modelRotationY;
+  const ct=Math.cos(theta),st=Math.sin(theta);
+  const ox=(c.x||0)+(0*ct+pose.muzzleOffsetZ*st);
+  const oz=(c.z||0)+(-0*st+pose.muzzleOffsetZ*ct);
+  const rays=[];
+
+  for(let i=0;i<=samples;i++){
+    const off=-fov/2+fov*i/samples;
+    const lx=-Math.sin(off);
+    const lz=Math.cos(off);
+    const dx=lx*ct+lz*st;
+    const dz=-lx*st+lz*ct;
+    let dist=range;
+    for(const [a,b] of segs){
+      const hit=raySeg({x:ox,z:oz},{x:dx,z:dz},a,b);
+      if(hit!==null&&hit>0.001&&hit<dist)dist=hit;
+    }
+    rays.push({off,dist});
+  }
+  return rays;
+}
+
 function cameraCoverage(c){
   const pre=LENS[String(c.lens)]||LENS['2.8'];
   const range=Number(c.range||pre.range);
   const fov=THREE.MathUtils.degToRad(pre.fov);
   const pose=getCameraPose(c);
+  const samples=72;
+  const rays=getCameraOccludedFan(c,range,fov,samples,pose);
 
-  // V2.15：扇形視野角度再反轉 180°，讓光線方向與目前鏡頭正面完全一致。
+  // V2.16：當牆體 / 連續牆 / 柱子 / 車輛開啟遮擋時，FOV 會被實際裁切。
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
-  const samples=72;
-  for(let i=0;i<=samples;i++){
-    const off=-fov/2+fov*i/samples;
-    const px=-Math.sin(off)*range;
-    const pz=Math.cos(off)*range;
+  for(const ray of rays){
+    const px=-Math.sin(ray.off)*ray.dist;
+    const pz=Math.cos(ray.off)*ray.dist;
     shape.lineTo(px,pz);
   }
   shape.closePath();
