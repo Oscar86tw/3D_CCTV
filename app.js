@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js';
+import { APP_CONFIG } from './config.js?v=2.2';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v21-api-url';
+const API_CACHE_KEY='utop-cctv-v22-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -43,40 +43,97 @@ function parseCsvCell(text){let s=String(text||'').trim();if(s.startsWith('"')&&
 async function getApiUrl(force=false){
   if(!APP_CONFIG.cloudApi?.enabled)throw new Error('雲端 API 尚未啟用');
   if(!force&&activeApiUrl)return activeApiUrl;
-  const fallback=String(APP_CONFIG.cloudApi.apiUrl||'').trim();
+
+  // V2.2：使用 config.js 內明確指定的正式 /exec 為第一優先。
+  // 不再讓 Google Sheets B1 的讀取阻塞網站首次雲端連線。
+  const configured=String(APP_CONFIG.cloudApi.apiUrl||'').trim().replace(/\?.*$/,'');
+  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(configured)){
+    activeApiUrl=configured;
+    localStorage.setItem(API_CACHE_KEY,configured);
+    return configured;
+  }
+
+  const cached=String(localStorage.getItem(API_CACHE_KEY)||'').trim().replace(/\?.*$/,'');
+  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(cached)){
+    activeApiUrl=cached;
+    return cached;
+  }
+
+  // 最後才嘗試工作表1!B1。
   try{
     const sheet=encodeURIComponent(APP_CONFIG.cloudApi.configSheet||'工作表1');
     const cell=encodeURIComponent(APP_CONFIG.cloudApi.apiCell||'B1');
     const url=`https://docs.google.com/spreadsheets/d/${APP_CONFIG.googleSheetId}/gviz/tq?tqx=out:csv&sheet=${sheet}&range=${cell}&_=${Date.now()}`;
     const res=await fetch(url,{cache:'no-store'});
     if(!res.ok)throw new Error(`B1 HTTP ${res.status}`);
-    const b1=parseCsvCell(await res.text());
-    if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec(?:\?.*)?$/i.test(b1)){
-      activeApiUrl=b1.replace(/\?.*$/,'');localStorage.setItem(API_CACHE_KEY,activeApiUrl);return activeApiUrl;
+    const b1=parseCsvCell(await res.text()).replace(/\?.*$/,'');
+    if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(b1)){
+      activeApiUrl=b1;
+      localStorage.setItem(API_CACHE_KEY,b1);
+      return b1;
     }
-  }catch(err){console.warn('讀取工作表1!B1失敗，使用設定檔 API：',err)}
-  const cached=localStorage.getItem(API_CACHE_KEY)||'';
-  activeApiUrl=fallback||cached;
-  if(!activeApiUrl)throw new Error('沒有可用的 Apps Script /exec');
-  activeApiUrl=activeApiUrl.replace(/\?.*$/,'');
-  return activeApiUrl;
+  }catch(err){
+    console.warn('工作表1!B1 備援讀取失敗：',err);
+  }
+
+  throw new Error('沒有可用的 Apps Script /exec');
 }
+
 function jsonpGet(action,params={},timeoutMs=30000){
   return new Promise(async(resolve,reject)=>{
     try{
       const base=await getApiUrl();
-      const cb=`__cctvV21_${Date.now()}_${++jsonpSeq}`;
-      const u=new URL(base);u.searchParams.set('action',action);u.searchParams.set('callback',cb);
-      Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!==null)u.searchParams.set(k,String(v))});
-      const script=document.createElement('script');let done=false,timer=null;
-      const cleanup=(late=false)=>{if(done)return;done=true;if(timer)clearTimeout(timer);script.remove();if(late){window[cb]=()=>{};setTimeout(()=>{try{delete window[cb]}catch{}},120000)}else{try{delete window[cb]}catch{}}};
-      window[cb]=data=>{cleanup(false);resolve(data)};
-      script.onerror=()=>{cleanup(false);reject(new Error(`JSONP API 載入失敗：${action}`))};
-      timer=setTimeout(()=>{cleanup(true);reject(new Error(`JSONP API ${action} 逾時（${Math.round(timeoutMs/1000)} 秒）`))},timeoutMs);
-      script.src=u.toString();document.head.appendChild(script);
-    }catch(err){reject(err)}
+      const cb=`__cctvV22_${Date.now()}_${++jsonpSeq}`;
+      const u=new URL(base);
+      u.searchParams.delete('action');
+      u.searchParams.delete('callback');
+      u.searchParams.set('action',action);
+      u.searchParams.set('callback',cb);
+      u.searchParams.set('_ts',Date.now());
+      Object.entries(params).forEach(([k,v])=>{
+        if(v!==undefined&&v!==null)u.searchParams.set(k,String(v));
+      });
+
+      const script=document.createElement('script');
+      script.async=true;
+      let done=false,timer=null;
+
+      const cleanup=(late=false)=>{
+        if(done)return;
+        done=true;
+        if(timer)clearTimeout(timer);
+        script.remove();
+        if(late){
+          window[cb]=()=>{};
+          setTimeout(()=>{try{delete window[cb]}catch{}},120000);
+        }else{
+          try{delete window[cb]}catch{}
+        }
+      };
+
+      window[cb]=data=>{
+        cleanup(false);
+        resolve(data);
+      };
+
+      script.onerror=()=>{
+        cleanup(false);
+        reject(new Error(`JSONP API 載入失敗：${action}`));
+      };
+
+      timer=setTimeout(()=>{
+        cleanup(true);
+        reject(new Error(`JSONP API ${action} 逾時（${Math.round(timeoutMs/1000)} 秒）`));
+      },timeoutMs);
+
+      script.src=u.toString();
+      document.head.appendChild(script);
+    }catch(err){
+      reject(err);
+    }
   });
 }
+
 async function formPost(body){
   const base=await getApiUrl();
   const frameName=`cctvPost_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -98,18 +155,75 @@ async function getCloudProjectChunked(projectId){
   }
   throw new Error('雲端專案分段數量超過上限');
 }
-async function renderCloudProjectCards(){
-  const el=$('cloudProjectCards');if(!el)return;
-  try{
-    setCloudStatus(false,'雲端連線中',true);
-    const ping=await jsonpGet('ping',{},30000);if(!ping?.ok)throw new Error(ping?.message||'ping 失敗');
-    cloudProjects=await listCloudProjects();
-    setCloudStatus(true,`雲端 ${cloudProjects.length} 筆`);
-    if(!cloudProjects.length){el.innerHTML='<div class="empty-card">Google Drive 尚無專案。建立專案後按「儲存」即可同步到雲端。</div>';return;}
-    el.innerHTML=cloudProjects.map(p=>`<article class="project-card cloud-card"><div><h3>${esc(p.projectName||'未命名專案')}</h3><div class="meta">${esc(p.siteType||'')}<br>${esc(p.address||'')}</div><span class="source-pill">Google Drive</span></div><div class="card-footer"><span class="meta">${p.updatedAt?new Date(p.updatedAt).toLocaleString():''}</span><button data-open-cloud="${esc(p.projectId)}">開啟專案</button></div></article>`).join('');
-    el.querySelectorAll('[data-open-cloud]').forEach(b=>b.onclick=()=>openCloudProject(b.dataset.openCloud));
-  }catch(err){setCloudStatus(false,'雲端連線失敗');el.innerHTML=`<div class="empty-card">雲端讀取失敗：${esc(err.message)}</div>`;console.warn(err)}
+
+function setCloudDiagnostics(message,details=''){
+  const box=$('cloudDiagnostics');
+  const text=$('cloudDiagnosticsText');
+  if(!box||!text)return;
+  const full=[message,details].filter(Boolean).join('\n');
+  text.textContent=full;
+  box.classList.toggle('hidden',!full);
 }
+async function testCloudConnection(){
+  activeApiUrl='';
+  const apiUrl=await getApiUrl(true);
+  setCloudDiagnostics('正在測試雲端…',`API：${apiUrl}`);
+  const ping=await jsonpGet('ping',{},30000);
+  if(!ping?.ok)throw new Error(ping?.message||'ping 失敗');
+  return {apiUrl,ping};
+}
+async function renderCloudProjectCards(){
+  const el=$('cloudProjectCards');
+  if(!el)return;
+
+  setCloudStatus(false,'連線中…',true);
+  el.innerHTML='<div class="empty-card">正在測試 Apps Script 與讀取雲端專案…</div>';
+
+  try{
+    const {apiUrl,ping}=await testCloudConnection();
+    const apiVersion=String(ping.apiVersion||'未知');
+    if(apiVersion!=='2.2'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.2`);
+    }
+
+    cloudProjects=await listCloudProjects();
+    setCloudStatus(true,`雲端已連線｜${cloudProjects.length} 筆`);
+    setCloudDiagnostics('', '');
+
+    if(!cloudProjects.length){
+      el.innerHTML='<div class="empty-card">雲端已連線。Google Drive 尚無專案；建立專案後按「儲存」即可同步。</div>';
+      return;
+    }
+
+    el.innerHTML=cloudProjects.map(p=>`
+      <article class="project-card cloud-card">
+        <div>
+          <h3>${esc(p.projectName||'未命名專案')}</h3>
+          <div class="meta">${esc(p.siteType||'')}<br>${esc(p.address||'')}</div>
+          <span class="source-pill">Google Drive</span>
+        </div>
+        <div class="card-footer">
+          <span class="meta">${p.updatedAt?new Date(p.updatedAt).toLocaleString():''}</span>
+          <button data-open-cloud="${esc(p.projectId)}">開啟專案</button>
+        </div>
+      </article>
+    `).join('');
+
+    el.querySelectorAll('[data-open-cloud]').forEach(b=>{
+      b.onclick=()=>openCloudProject(b.dataset.openCloud);
+    });
+  }catch(err){
+    const api=activeApiUrl||APP_CONFIG.cloudApi?.apiUrl||'未取得';
+    setCloudStatus(false,'雲端連線失敗');
+    el.innerHTML='<div class="empty-card">雲端尚未連線。請查看下方診斷資訊後按「重新測試」。</div>';
+    setCloudDiagnostics(
+      `錯誤：${err.message}`,
+      `前端：${APP_VERSION}\nAPI：${api}\nGitHub：${APP_CONFIG.githubPages||location.href}`
+    );
+    console.warn('Cloud connection error:',err);
+  }
+}
+
 async function openCloudProject(projectId){
   try{
     setCloudStatus(false,'讀取中',true);
@@ -194,4 +308,23 @@ $('zoomInBtn').onclick=()=>zoom(.82);$('zoomOutBtn').onclick=()=>zoom(1.22);$('r
 async function exportProject(){if(!currentProject)return;await saveProject(false);const blob=new Blob([JSON.stringify({format:'UTOP-CCTV3D',formatVersion:2,appVersion:APP_VERSION,project:clone(currentProject)},null,2)],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=`${currentProject.name.replace(/[\\/:*?"<>|]+/g,'-')}-${APP_VERSION}.cctv3d`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}$('exportProjectBtn').onclick=exportProject;
 $('importProjectBtn').onclick=()=>$('importProjectFile').click();$('importProjectFile').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const x=JSON.parse(await f.text()),p=x.project||x;if(!p?.name)throw new Error('格式不正確');p.id=uid('project');p.updatedAt=now();p.version=APP_VERSION;await dbPut(p);renderProjectCards();toast('專案已匯入')}catch(err){alert(`匯入失敗：${err.message}`)}e.target.value=''};$('deleteProjectBtn').onclick=async()=>{if(currentProject&&confirm(`確定刪除專案「${currentProject.name}」？`)){await dbDelete(currentProject.id);goHome()}};$('refreshProjectListBtn').onclick=renderProjectCards;if($('refreshCloudProjectsBtn'))$('refreshCloudProjectsBtn').onclick=()=>{activeApiUrl='';renderCloudProjectCards()};
 
-(async function startup(){await openDb();await renderProjectCards();applyPanels();resize();$('statusText').textContent=`${APP_CONFIG.appName} ${APP_VERSION}｜本機＋Google Drive 編輯版`;renderCloudProjectCards()})().catch(e=>alert(`系統啟動失敗：${e.message}`));
+
+if($('retryCloudBtn'))$('retryCloudBtn').onclick=()=>{activeApiUrl='';renderCloudProjectCards();};
+if($('copyCloudDiagBtn'))$('copyCloudDiagBtn').onclick=async()=>{
+  const text=$('cloudDiagnosticsText')?.textContent||'';
+  try{await navigator.clipboard.writeText(text);toast('診斷資訊已複製');}
+  catch{prompt('複製診斷資訊：',text);}
+};
+
+(async function startup(){
+  await openDb();
+  await renderProjectCards();
+  applyPanels();
+  resize();
+  $('statusText').textContent=`${APP_CONFIG.appName} ${APP_VERSION}｜本機＋Google Drive 編輯版`;
+  await renderCloudProjectCards();
+})().catch(e=>{
+  console.error(e);
+  setCloudDiagnostics(`系統啟動錯誤：${e.message}`,e.stack||'');
+  alert(`系統啟動失敗：${e.message}`);
+});

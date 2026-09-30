@@ -7,3 +7,13 @@
 .cloud-badge.offline{border-color:#63313a;background:#25161a;color:#ffaaaa}
 .project-card.cloud-card{border-color:#28546b}
 .project-card .source-pill{display:inline-block;margin-top:7px;padding:3px 7px;border:1px solid #31586e;border-radius:999px;color:#8edff0;font-size:9px}
+
+.cloud-diagnostics{
+  margin-top:12px;border:1px solid #31536a;background:#0d1b25;border-radius:12px;
+  padding:12px 14px;color:#bcd0dd;font-size:12px;white-space:pre-wrap;line-height:1.6
+}
+.cloud-diagnostics strong{color:#e7f7ff}
+.cloud-diagnostics-actions{display:flex;gap:8px;margin-top:10px}
+.cloud-diagnostics-actions button{
+  border:1px solid #35586f;background:#132838;color:#e7f4fb;border-radius:8px;padding:7px 10px
+}

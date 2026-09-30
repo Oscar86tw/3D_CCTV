@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>昱拓弱電｜3D CCTV 編輯器 V2.1</title>
-  <link rel="stylesheet" href="styles.css">
+  <title>昱拓弱電｜3D CCTV 編輯器 V2.2</title>
+  <link rel="stylesheet" href="styles.css?v=2.2">
 </head>
 <body>
 <section id="projectHome" class="project-home">
@@ -14,7 +14,7 @@
       <h1>3D CCTV 專案中心</h1>
       <p>先建立社區專案，再建立樓層／場景、匯入平面圖，最後進行 CCTV 3D 配置。</p>
     </div>
-    <span class="version">V2.1</span>
+    <span class="version">V2.2</span>
   </header>
   <div class="home-actions">
     <button id="newProjectBtn" class="primary big">＋ 建立新專案</button>
@@ -25,6 +25,15 @@
   <div id="projectCards" class="project-cards"></div>
   <div class="section-title cloud-title"><strong>Google Drive 雲端專案</strong><span id="homeCloudStatus" class="cloud-badge offline">尚未連線</span></div>
   <div id="cloudProjectCards" class="project-cards cloud-project-cards"><div class="empty-card">正在讀取雲端專案…</div></div>
+  <div id="cloudDiagnostics" class="cloud-diagnostics hidden">
+    <div><strong>雲端連線診斷</strong></div>
+    <div id="cloudDiagnosticsText"></div>
+    <div class="cloud-diagnostics-actions">
+      <button id="retryCloudBtn">重新測試</button>
+      <button id="copyCloudDiagBtn">複製診斷</button>
+    </div>
+  </div>
+
 </section>
 
 <section id="editorApp" class="editor-app hidden">
@@ -43,7 +52,7 @@
       <button data-menu="view">視角</button>
       <button data-menu="report">報告</button>
     </nav>
-    <div class="top-actions"><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.1</span></div>
+    <div class="top-actions"><span id="editorCloudStatus" class="cloud-badge offline">尚未連線</span><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.2</span></div>
   </header>
 
   <div id="editorGrid" class="editor-grid">
@@ -114,6 +123,6 @@
 <div id="newSceneModal" class="modal hidden"><div class="modal-card small-card"><div class="modal-head"><div><div class="kicker">NEW SCENE</div><h3>新增樓層 / 場景</h3></div><button data-close="newSceneModal">×</button></div><label>樓層<select id="newSceneType"><option>RF</option><option>R1F</option><option>1MF</option><option>1F</option><option>2F</option><option>3F</option><option>B1</option><option>B2</option><option>B3</option><option>B4</option><option>B5</option><option>B6</option><option>自訂</option></select></label><label>場景名稱<input id="newSceneName" type="text" placeholder="例：B1 地下停車場"></label><div class="modal-actions"><button data-close="newSceneModal">取消</button><button id="createSceneConfirmBtn" class="primary">建立</button></div></div></div>
 <div id="toast" class="toast hidden"></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=2.2"></script>
 </body>
 </html>
