@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>昱拓弱電｜3D CCTV 編輯器 V2.0</title>
+  <title>昱拓弱電｜3D CCTV 編輯器 V2.1</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -14,15 +14,17 @@
       <h1>3D CCTV 專案中心</h1>
       <p>先建立社區專案，再建立樓層／場景、匯入平面圖，最後進行 CCTV 3D 配置。</p>
     </div>
-    <span class="version">V2.0</span>
+    <span class="version">V2.1</span>
   </header>
   <div class="home-actions">
     <button id="newProjectBtn" class="primary big">＋ 建立新專案</button>
-    <button id="importProjectBtn" class="big">匯入專案檔</button>
+    <button id="importProjectBtn" class="big">匯入專案檔</button><button id="refreshCloudProjectsBtn" class="big">↻ 重新整理雲端</button>
     <input id="importProjectFile" type="file" accept=".cctv3d,.json" hidden>
   </div>
-  <div class="section-title"><strong>最近專案</strong><button id="refreshProjectListBtn">重新整理</button></div>
+  <div class="section-title"><strong>最近專案｜本機</strong><button id="refreshProjectListBtn">重新整理</button></div>
   <div id="projectCards" class="project-cards"></div>
+  <div class="section-title cloud-title"><strong>Google Drive 雲端專案</strong><span id="homeCloudStatus" class="cloud-badge offline">尚未連線</span></div>
+  <div id="cloudProjectCards" class="project-cards cloud-project-cards"><div class="empty-card">正在讀取雲端專案…</div></div>
 </section>
 
 <section id="editorApp" class="editor-app hidden">
@@ -41,7 +43,7 @@
       <button data-menu="view">視角</button>
       <button data-menu="report">報告</button>
     </nav>
-    <div class="top-actions"><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.0</span></div>
+    <div class="top-actions"><button id="saveProjectBtn" class="primary">儲存</button><button id="focusModeBtn">⛶</button><span class="version small">V2.1</span></div>
   </header>
 
   <div id="editorGrid" class="editor-grid">
