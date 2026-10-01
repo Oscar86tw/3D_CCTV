@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { APP_CONFIG } from './config.js?v=2.16';
+import { APP_CONFIG } from './config.js?v=2.17';
 
 const $=id=>document.getElementById(id);
 const APP_VERSION=APP_CONFIG.version;
 const DB_NAME='UTOP_CCTV_V2';
 const STORE_NAME='projects';
 const UI_KEY='utop-cctv-v2-ui';
-const API_CACHE_KEY='utop-cctv-v216-api-url';
+const API_CACHE_KEY='utop-cctv-v217-api-url';
 let cloudProjects=[];
 let cloudConnected=false;
 let activeApiUrl='';
@@ -332,8 +332,8 @@ async function renderCloudProjectCards(){
   try{
     const {apiUrl,ping}=await testCloudConnection();
     const apiVersion=String(ping.apiVersion||'未知');
-    if(apiVersion!=='2.16'){
-      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.16`);
+    if(apiVersion!=='2.17'){
+      console.warn(`目前 Apps Script API 版本：${apiVersion}，前端：2.17`);
     }
 
     cloudProjects=await listCloudProjects();
@@ -498,14 +498,14 @@ window.addEventListener('resize',resize);(function loop(){
   controls.update();
 
   const t=performance.now()/1000;
-  newCameraStars.forEach(star=>{
-    // 星星永遠朝向目前鏡頭，並以「無敵星星」方式閃爍 / 呼吸。
-    star.quaternion.copy(camera3d.quaternion);
+  newCameraStars.forEach(marker=>{
+    // 增設星星 / 故障驚嘆號都永遠朝向觀看鏡頭並閃爍。
+    marker.quaternion.copy(camera3d.quaternion);
     const pulse=1+Math.sin(t*5.2)*.16;
-    star.scale.setScalar(pulse);
-    star.visible=Math.sin(t*9)>-.65;
-    const s=star.children?.[0];
-    if(s?.material)s.material.opacity=.78+(Math.sin(t*6.5)+1)*.11;
+    marker.scale.setScalar(pulse);
+    marker.visible=Math.sin(t*9)>-.65;
+    const face=marker.children?.[0];
+    if(face?.material)face.material.opacity=.78+(Math.sin(t*6.5)+1)*.11;
   });
 
   renderer.render(scene3d,camera3d);
@@ -761,15 +761,32 @@ function makeObstacle(o){
 function raySeg(origin,dir,a,b){const rx=dir.x,rz=dir.z,sx=b.x-a.x,sz=b.z-a.z,qx=a.x-origin.x,qz=a.z-origin.z,den=rx*sz-rz*sx;if(Math.abs(den)<1e-7)return null;const t=(qx*sz-qz*sx)/den,u=(qx*rz-qz*rx)/den;return t>=0&&u>=0&&u<=1?t:null}
 function obstacleSegments(){
   const out=[];
+  const addRectEdges=(p)=>{
+    for(let i=0;i<4;i++)out.push([p[i],p[(i+1)%4]]);
+  };
+  const wallSegmentRect=(a,b,thickness)=>{
+    const dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz)||1;
+    const nx=-dz/len*(thickness/2),nz=dx/len*(thickness/2);
+    return [
+      {x:a.x+nx,z:a.z+nz},
+      {x:b.x+nx,z:b.z+nz},
+      {x:b.x-nx,z:b.z-nz},
+      {x:a.x-nx,z:a.z-nz}
+    ];
+  };
+
   (currentScene?.obstacles||[]).forEach(o=>{
     if(o.hidden||o.occludes===false||o.type==='parking')return;
 
+    // V2.17：連續牆依「實際牆厚」建立遮擋邊界，
+    // 不再只拿牆中心線來切 FOV，避免視野在還沒碰到牆面時提前消失。
     if(o.type==='wallpath'){
       const pts=o.points||[];
       const count=o.closed?pts.length:pts.length-1;
+      const thickness=Number(o.thickness||.18);
       for(let i=0;i<count;i++){
         const a=pts[i],b=pts[(i+1)%pts.length];
-        if(a&&b)out.push([{x:a.x,z:a.z},{x:b.x,z:b.z}]);
+        if(a&&b)addRectEdges(wallSegmentRect(a,b,thickness));
       }
       return;
     }
@@ -784,40 +801,45 @@ function obstacleSegments(){
     else if(o.type==='car'){hw=.9;hd=2.1}
     else if(o.type==='motorcycle'){hw=.35;hd=.95}
 
-    const p=[tr(-hw,-hd),tr(hw,-hd),tr(hw,hd),tr(-hw,hd)];
-    for(let i=0;i<4;i++)out.push([p[i],p[(i+1)%4]]);
+    addRectEdges([tr(-hw,-hd),tr(hw,-hd),tr(hw,hd),tr(-hw,hd)]);
   });
   return out;
 }
 function getCameraPose(c){
   const yawDeg=Number(c.yaw||0);
   const yawRad=THREE.MathUtils.degToRad(yawDeg);
-  // 模型本體 local -Z 為鏡頭朝向，因此旋轉採 -yaw。
+  // V2.17：完全沿用 V1.16 的鏡頭方向座標。
+  // 鏡頭正面 = local +X；整組再依 yaw 做 -yaw 旋轉。
   const modelRotationY=-yawRad;
-  const mountY=2.7;
-  // V2.14：套用 V1.16 盒式鏡頭造型，鏡片前端更往前，FOV 發射點同步微調。
-  const muzzleOffsetZ=-1.18;
-  return {yawDeg,yawRad,modelRotationY,mountY,muzzleOffsetZ};
+  const mountY=2.58;
+  const muzzleOffsetX=1.19;
+  return {yawDeg,yawRad,modelRotationY,mountY,muzzleOffsetX};
 }
 
 function getCameraOccludedFan(c,range,fov,samples,pose){
   const segs=obstacleSegments();
   const theta=pose.modelRotationY;
   const ct=Math.cos(theta),st=Math.sin(theta);
-  const ox=(c.x||0)+(0*ct+pose.muzzleOffsetZ*st);
-  const oz=(c.z||0)+(-0*st+pose.muzzleOffsetZ*ct);
+
+  // V1.16 鏡頭鏡片在 local +X。
+  const ox=(c.x||0)+pose.muzzleOffsetX*ct;
+  const oz=(c.z||0)-pose.muzzleOffsetX*st;
   const rays=[];
 
   for(let i=0;i<=samples;i++){
     const off=-fov/2+fov*i/samples;
-    const lx=-Math.sin(off);
-    const lz=Math.cos(off);
+
+    // 完全沿用 V1.16：local forward = +X，local Z = -sin(off)。
+    const lx=Math.cos(off);
+    const lz=-Math.sin(off);
+
     const dx=lx*ct+lz*st;
     const dz=-lx*st+lz*ct;
+
     let dist=range;
     for(const [a,b] of segs){
       const hit=raySeg({x:ox,z:oz},{x:dx,z:dz},a,b);
-      if(hit!==null&&hit>0.001&&hit<dist)dist=hit;
+      if(hit!==null&&hit>.01&&hit<dist)dist=hit;
     }
     rays.push({off,dist});
   }
@@ -829,16 +851,14 @@ function cameraCoverage(c){
   const range=Number(c.range||pre.range);
   const fov=THREE.MathUtils.degToRad(pre.fov);
   const pose=getCameraPose(c);
-  const samples=72;
-  const rays=getCameraOccludedFan(c,range,fov,samples,pose);
+  const rays=getCameraOccludedFan(c,range,fov,96,pose);
 
-  // V2.16：當牆體 / 連續牆 / 柱子 / 車輛開啟遮擋時，FOV 會被實際裁切。
   const shape=new THREE.Shape();
   shape.moveTo(0,0);
   for(const ray of rays){
-    const px=-Math.sin(ray.off)*ray.dist;
-    const pz=Math.cos(ray.off)*ray.dist;
-    shape.lineTo(px,pz);
+    // Shape 的 Y 在 rotateX(-90°) 後會成為 -Z，
+    // 因此這裡使用 +sin(off)，正好對應 local Z = -sin(off)。
+    shape.lineTo(Math.cos(ray.off)*ray.dist,Math.sin(ray.off)*ray.dist);
   }
   shape.closePath();
 
@@ -857,14 +877,14 @@ function cameraCoverage(c){
       depthWrite:false
     })
   );
-  coverage.position.set(0,.055,pose.muzzleOffsetZ);
+  // 視野真正從 V1.16 鏡片前端 local +X 開始。
+  coverage.position.set(pose.muzzleOffsetX,.055,0);
   coverage.renderOrder=6;
   coverage.userData={kind:'camera-coverage',id:c.id};
   group.add(coverage);
 
   return group;
 }
-
 function createFivePointStarShape(outer=0.9,inner=0.4){
   const shape=new THREE.Shape();
   for(let i=0;i<10;i++){
@@ -932,78 +952,144 @@ function makeNewCameraStar(c){
   return g;
 }
 
+function makeFaultCameraMarker(c){
+  const g=new THREE.Group();
+  g.position.set(c.x||0,7,c.z||0);
+  g.userData={kind:'fault-camera-marker',cameraId:c.id,baseScale:1};
+
+  const badge=new THREE.Mesh(
+    new THREE.CircleGeometry(1.05,32),
+    new THREE.MeshBasicMaterial({
+      color:0xff5a1f,
+      transparent:true,
+      opacity:.93,
+      side:THREE.DoubleSide,
+      depthTest:false
+    })
+  );
+  badge.renderOrder=20;
+  g.add(badge);
+
+  const bar=new THREE.Mesh(
+    new THREE.BoxGeometry(.24,1.05,.06),
+    new THREE.MeshBasicMaterial({color:0xffffff,depthTest:false})
+  );
+  bar.position.set(0,.20,.04);
+  bar.renderOrder=21;
+  g.add(bar);
+
+  const dot=new THREE.Mesh(
+    new THREE.CircleGeometry(.16,20),
+    new THREE.MeshBasicMaterial({color:0xffffff,depthTest:false})
+  );
+  dot.position.set(0,-.55,.05);
+  dot.renderOrder=21;
+  g.add(dot);
+
+  const glow=new THREE.Mesh(
+    new THREE.CircleGeometry(1.28,32),
+    new THREE.MeshBasicMaterial({
+      color:0xff7a33,
+      transparent:true,
+      opacity:.14,
+      side:THREE.DoubleSide,
+      depthTest:false
+    })
+  );
+  glow.position.z=-.03;
+  glow.renderOrder=19;
+  g.add(glow);
+
+  const stem=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0,-4.15,0),
+      new THREE.Vector3(0,-1.05,0)
+    ]),
+    new THREE.LineDashedMaterial({
+      color:0xff6a2a,
+      transparent:true,
+      opacity:.55,
+      dashSize:.28,
+      gapSize:.18,
+      depthTest:false
+    })
+  );
+  stem.computeLineDistances();
+  stem.renderOrder=18;
+  g.add(stem);
+
+  // 與新增星星共用 billboard / 閃爍動畫陣列。
+  newCameraStars.push(g);
+  return g;
+}
+
 function makeCamera(c){
   const isSelected=selected.kind==='camera'&&selected.id===c.id;
   const color=COLORS[c.status]||COLORS.existing;
+  const pose=getCameraPose(c);
+
   const g=new THREE.Group();
   g.position.set(c.x||0,0,c.z||0);
-  const pose=getCameraPose(c);
   g.rotation.y=pose.modelRotationY;
   g.userData={kind:'camera',id:c.id};
 
-  const bodyColor=isSelected?0xf8fafc:color;
-  const bodyMat=new THREE.MeshStandardMaterial({color:bodyColor,metalness:.24,roughness:.48,emissive:isSelected?0x223344:0x000000});
-  const shellMat=new THREE.MeshStandardMaterial({color:isSelected?0xffffff:0xe5e7eb,metalness:.22,roughness:.50,emissive:isSelected?0x223344:0x000000});
+  const bodyMat=new THREE.MeshStandardMaterial({color:isSelected?0xf8fafc:color,metalness:.24,roughness:.48,emissive:isSelected?0x223344:0});
+  const shellMat=new THREE.MeshStandardMaterial({color:isSelected?0xffffff:0xe5e7eb,metalness:.22,roughness:.50,emissive:isSelected?0x223344:0});
   const darkMat=new THREE.MeshStandardMaterial({color:0x2a313d,metalness:.16,roughness:.55});
   const lensMat=new THREE.MeshStandardMaterial({color:0x111827,metalness:.72,roughness:.14});
   const glassMat=new THREE.MeshStandardMaterial({color:0x9fb9ff,roughness:.04,metalness:.76,transparent:true,opacity:.90,emissive:0x1d4ed8,emissiveIntensity:.18});
   const standMat=new THREE.MeshStandardMaterial({color:0x6b7280,roughness:.62,metalness:.20});
   const screwMat=new THREE.MeshStandardMaterial({color:0xa8b1bd,roughness:.45,metalness:.55});
 
-  // 內部模型沿用 V1.16 盒式鏡頭造型，再旋轉到 V2 的朝向座標系。
-  const model=new THREE.Group();
-  model.rotation.y=Math.PI/2;
-  model.userData=g.userData;
-  g.add(model);
+  // 直接採用 V1.16 模型座標：鏡頭沿 local +X 朝前。
+  const hood=new THREE.Mesh(new THREE.BoxGeometry(1.74,.62,1.10),shellMat);
+  hood.position.set(-.05,2.92,0);hood.scale.set(1,1,.95);hood.userData=g.userData;g.add(hood);
 
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.74,.62,1.1), shellMat);
-  hood.position.set(-.05,2.92,0); hood.scale.set(1,1,.95); hood.userData=g.userData; model.add(hood);
+  const hoodCut=new THREE.Mesh(new THREE.BoxGeometry(1.18,.40,.82),new THREE.MeshStandardMaterial({color:0x0f172a,roughness:.92,metalness:0}));
+  hoodCut.position.set(-.30,2.86,0);hoodCut.userData=g.userData;g.add(hoodCut);
 
-  const hoodCut = new THREE.Mesh(new THREE.BoxGeometry(1.18,.4,.82), new THREE.MeshStandardMaterial({color:0x0f172a, roughness:.92, metalness:0}));
-  hoodCut.position.set(-.30,2.86,0); hoodCut.userData=g.userData; model.add(hoodCut);
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.55,.92,.92),bodyMat);
+  body.position.set(-.02,2.58,0);body.userData=g.userData;g.add(body);
 
-  const mainBody = new THREE.Mesh(new THREE.BoxGeometry(1.55,.92,.92), bodyMat);
-  mainBody.position.set(-.02,2.58,0); mainBody.userData=g.userData; model.add(mainBody);
+  const rearCap=new THREE.Mesh(new THREE.CylinderGeometry(.42,.46,.16,18),darkMat);
+  rearCap.rotation.z=Math.PI/2;rearCap.position.set(-.82,2.56,0);rearCap.userData=g.userData;g.add(rearCap);
 
-  const rearCap = new THREE.Mesh(new THREE.CylinderGeometry(.42,.46,.16,18), darkMat);
-  rearCap.rotation.z=Math.PI/2; rearCap.position.set(-.82,2.56,0); rearCap.userData=g.userData; model.add(rearCap);
+  const frontFrame=new THREE.Mesh(new THREE.BoxGeometry(.48,.86,.86),darkMat);
+  frontFrame.position.set(.68,2.58,0);frontFrame.userData=g.userData;g.add(frontFrame);
 
-  const frontFrame = new THREE.Mesh(new THREE.BoxGeometry(.48,.86,.86), darkMat);
-  frontFrame.position.set(.68,2.58,0); frontFrame.userData=g.userData; model.add(frontFrame);
+  const bezel=new THREE.Mesh(new THREE.CylinderGeometry(.34,.34,.12,8),darkMat);
+  bezel.rotation.z=Math.PI/2;bezel.position.set(.88,2.58,0);bezel.userData=g.userData;g.add(bezel);
 
-  const bezel = new THREE.Mesh(new THREE.CylinderGeometry(.34,.34,.12,8), darkMat);
-  bezel.rotation.z=Math.PI/2; bezel.position.set(.88,2.58,0); bezel.userData=g.userData; model.add(bezel);
+  const lensBarrel=new THREE.Mesh(new THREE.CylinderGeometry(.24,.28,.34,24),lensMat);
+  lensBarrel.rotation.z=Math.PI/2;lensBarrel.position.set(1.02,2.58,0);lensBarrel.userData=g.userData;g.add(lensBarrel);
 
-  const lensBarrel = new THREE.Mesh(new THREE.CylinderGeometry(.24,.28,.34,24), lensMat);
-  lensBarrel.rotation.z=Math.PI/2; lensBarrel.position.set(1.02,2.58,0); lensBarrel.userData=g.userData; model.add(lensBarrel);
+  const lensGlass=new THREE.Mesh(new THREE.CylinderGeometry(.18,.18,.04,24),glassMat);
+  lensGlass.rotation.z=Math.PI/2;lensGlass.position.set(1.19,2.58,0);lensGlass.userData=g.userData;g.add(lensGlass);
 
-  const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(.18,.18,.04,24), glassMat);
-  lensGlass.rotation.z=Math.PI/2; lensGlass.position.set(1.19,2.58,0); lensGlass.userData=g.userData; model.add(lensGlass);
+  const arm=new THREE.Mesh(new THREE.BoxGeometry(.46,.68,.26),bodyMat);
+  arm.position.set(-.08,1.98,0);arm.userData=g.userData;g.add(arm);
 
-  const arm = new THREE.Mesh(new THREE.BoxGeometry(.46,.68,.26), bodyMat);
-  arm.position.set(-.08,1.98,0); arm.userData=g.userData; model.add(arm);
+  const yoke=new THREE.Mesh(new THREE.CylinderGeometry(.12,.12,.36,16),darkMat);
+  yoke.rotation.x=Math.PI/2;yoke.position.set(-.08,2.18,0);yoke.userData=g.userData;g.add(yoke);
 
-  const yoke = new THREE.Mesh(new THREE.CylinderGeometry(.12,.12,.36,16), darkMat);
-  yoke.rotation.x=Math.PI/2; yoke.position.set(-.08,2.18,0); yoke.userData=g.userData; model.add(yoke);
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(.19,.21,1.62,18),standMat);
+  pole.position.set(-.08,1.00,0);pole.userData=g.userData;g.add(pole);
 
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.19,.21,1.62,18), standMat);
-  pole.position.set(-.08,1.0,0); pole.userData=g.userData; model.add(pole);
+  const collar=new THREE.Mesh(new THREE.CylinderGeometry(.28,.30,.24,18),darkMat);
+  collar.position.set(-.08,.24,0);collar.userData=g.userData;g.add(collar);
 
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(.28,.30,.24,18), darkMat);
-  collar.position.set(-.08,.24,0); collar.userData=g.userData; model.add(collar);
-
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(.62,.66,.14,24), standMat);
-  base.position.y=.07; base.userData=g.userData; model.add(base);
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(.62,.66,.14,24),standMat);
+  base.position.y=.07;base.userData=g.userData;g.add(base);
 
   for(const ang of [45,135,225,315]){
     const r=THREE.MathUtils.degToRad(ang);
-    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,.04,12), screwMat);
-    bolt.position.set(-.08+Math.cos(r)*.42,.15,Math.sin(r)*.42); bolt.userData=g.userData; model.add(bolt);
+    const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,.04,12),screwMat);
+    bolt.position.set(-.08+Math.cos(r)*.42,.15,Math.sin(r)*.42);bolt.userData=g.userData;g.add(bolt);
   }
   for(const sy of[-.25,.25]){
     for(const sz of[-.25,.25]){
-      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,.02,12), screwMat);
-      screw.rotation.z=Math.PI/2; screw.position.set(.88,2.58+sy,sz); screw.userData=g.userData; model.add(screw);
+      const screw=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,.02,12),screwMat);
+      screw.rotation.z=Math.PI/2;screw.position.set(.88,2.58+sy,sz);screw.userData=g.userData;g.add(screw);
     }
   }
   return g;
@@ -1021,6 +1107,7 @@ function renderObjects(){
     cameraRoot.add(makeCamera(c));
     if(c.showFov!==false)cameraRoot.add(cameraCoverage(c));
     if(c.status==='new')cameraRoot.add(makeNewCameraStar(c));
+    if(c.status==='fault')cameraRoot.add(makeFaultCameraMarker(c));
   });
   currentScene.marks.forEach(m=>markRoot.add(makeMark(m)));
   refreshCounts();

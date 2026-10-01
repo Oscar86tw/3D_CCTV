@@ -1,6 +1,6 @@
 export const APP_CONFIG = {
   appName: '3D CCTV',
-  version: 'V2.16',
+  version: 'V2.17',
   githubRepository: 'https://github.com/Oscar86tw/3D_CCTV',
   githubPages: 'https://oscar86tw.github.io/3D_CCTV/',
   googleSheetUrl: 'https://docs.google.com/spreadsheets/d/1iFo_ssShGpADOEj2D5ItF5FAYaoJclyrSXo1k61YXl0/edit?usp=sharing',
